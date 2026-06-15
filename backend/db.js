@@ -128,11 +128,18 @@ async function saveConfig(config) {
 async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
   if (process.env.DATABASE_URL) {
     try {
+      // Get the sum of client revenue for this instance
+      const clientRes = await runPgQuery(
+        'SELECT COALESCE(SUM(revenue_usd), 0) as total FROM client_stats WHERE instance_name = $1;',
+        [INSTANCE_NAME]
+      );
+      const instanceRevenue = parseFloat(clientRes.rows[0]?.total || 0);
+
       await runPgQuery(
         'INSERT INTO revenue_history (instance_name, profile_name, today_usd, lifetime_usd) VALUES ($1, $2, $3, $4);',
-        [INSTANCE_NAME, profileName, todayUsd, lifetimeUsd]
+        [INSTANCE_NAME, profileName, instanceRevenue, instanceRevenue]
       );
-      console.log(`SYSTEM: Saved revenue snapshot for ${profileName} ($${todayUsd}) under instance ${INSTANCE_NAME}.`);
+      console.log(`SYSTEM: Saved revenue snapshot for instance ${INSTANCE_NAME} ($${instanceRevenue}) (profile: ${profileName}).`);
       
       // Auto-prune data older than 5 days
       await runPgQuery("DELETE FROM revenue_history WHERE timestamp < NOW() - INTERVAL '5 days';");

@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { 
   Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal,
   Settings, LineChart as LineChartIcon, RefreshCw, LogOut, Plus, Trash2,
-  Play, Square, AlertCircle, Ban, Server, Compass, Sparkles
+  Play, Square, AlertCircle, Ban, Server, Compass, Sparkles,
+  TrendingUp, Zap, Target, ShieldCheck, Gauge, BarChart3, Clock, DollarSign
 } from 'lucide-react';
 
 const MuiLineChart = lazy(() =>
@@ -75,6 +76,10 @@ export default function App() {
 
   const [revenueHistories, setRevenueHistories] = useState({});
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Rolling revenue samples for velocity calculation
+  const revenueSamplesRef = useRef([]);
+  const MAX_SAMPLES = 30; // Keep ~2.5 min of samples at 5s polling
 
   const logsEndRef = useRef(null);
   const initialAuthCheckedRef = useRef(!password);
@@ -454,6 +459,13 @@ export default function App() {
     totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
     uniqueProfilesCount = Object.keys(uniqueProfiles).length;
 
+    // Track revenue samples for velocity calculation
+    const now = Date.now();
+    const samples = revenueSamplesRef.current;
+    if (samples.length === 0 || now - samples[samples.length - 1].t >= 4000) {
+      samples.push({ t: now, v: totalTodayRun });
+      if (samples.length > MAX_SAMPLES) samples.shift();
+    }
 
   } else {
     // When offline, fallback to the overall global cached metrics
@@ -465,6 +477,42 @@ export default function App() {
     uniqueProfilesCount = cached.uniqueProfilesCount;
     allClientsList = cached.allClientsList || [];
   }
+
+  // === COMPUTED ANALYTICS (all derived, zero hardcoded) ===
+
+  // Revenue Velocity
+  const samples = revenueSamplesRef.current;
+  let revenuePerMinute = 0;
+  let revenuePerHour = 0;
+  let projectedDaily = 0;
+
+  if (samples.length >= 2) {
+    const oldest = samples[0];
+    const newest = samples[samples.length - 1];
+    const dtMinutes = (newest.t - oldest.t) / 60000;
+    if (dtMinutes > 0) {
+      const delta = newest.v - oldest.v;
+      revenuePerMinute = Math.max(0, delta / dtMinutes);
+      revenuePerHour = revenuePerMinute * 60;
+      projectedDaily = revenuePerHour * 24;
+    }
+  }
+
+  // Fleet Efficiency
+  const totalTicks = allClientsList.reduce((s, c) => s + (c.ticks || 0), 0);
+  const totalBills = allClientsList.reduce((s, c) => s + (c.billing_count || 0), 0);
+  const activeClients = allClientsList.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
+
+  const billingSuccessRate = totalTicks > 0 ? ((totalBills / totalTicks) * 100) : 0;
+  const revenuePerClient = activeClients > 0 ? (totalTodayRun / activeClients) : 0;
+  const revenuePerBackend = runningBackends > 0 ? (totalTodayRun / runningBackends) : 0;
+
+  // Operational Health
+  const errorClients = allClientsList.filter(c => (c.lastStatus || '').includes('Error')).length;
+  const errorRate = allClientsList.length > 0 ? ((errorClients / allClientsList.length) * 100) : 0;
+  const fleetUtilization = allClientsList.length > 0 ? ((activeClients / allClientsList.length) * 100) : 0;
+  const avgTicksPerClient = activeClients > 0 ? (totalTicks / activeClients) : 0;
+  const avgBillsPerClient = activeClients > 0 ? (totalBills / activeClients) : 0;
 
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
 
@@ -665,6 +713,12 @@ export default function App() {
                 <p className="hero-meter-label">Run revenue</p>
                 <p className="hero-meter-value">${totalTodayRun.toFixed(4)}</p>
                 <p className="hero-meter-footnote">Real account total: ${totalCurrentToday.toFixed(2)}</p>
+                {revenuePerHour > 0 && (
+                  <p className="hero-meter-rate">
+                    <TrendingUp size={12} />
+                    ${revenuePerHour.toFixed(4)}/hr
+                  </p>
+                )}
               </div>
             </section>
 
@@ -695,6 +749,37 @@ export default function App() {
                 <div>
                   <p className="metric-label">Profiles tracked</p>
                   <p className="metric-value">{uniqueProfilesCount}</p>
+                </div>
+              </div>
+            </section>
+
+            {/* Revenue Velocity Strip */}
+            <section className="velocity-strip" aria-label="Revenue velocity">
+              <div className={`velocity-tile ${revenuePerMinute > 0 ? 'earning' : ''}`}>
+                <div className="velocity-icon">
+                  <Zap size={18} />
+                </div>
+                <div>
+                  <p className="metric-label">Revenue / min</p>
+                  <p className="velocity-value">${revenuePerMinute.toFixed(6)}</p>
+                </div>
+              </div>
+              <div className={`velocity-tile ${revenuePerHour > 0 ? 'earning' : ''}`}>
+                <div className="velocity-icon">
+                  <Clock size={18} />
+                </div>
+                <div>
+                  <p className="metric-label">Revenue / hour</p>
+                  <p className="velocity-value">${revenuePerHour.toFixed(4)}</p>
+                </div>
+              </div>
+              <div className={`velocity-tile ${projectedDaily > 0 ? 'earning' : ''}`}>
+                <div className="velocity-icon">
+                  <TrendingUp size={18} />
+                </div>
+                <div>
+                  <p className="metric-label">Projected / day</p>
+                  <p className="velocity-value">${projectedDaily.toFixed(2)}</p>
                 </div>
               </div>
             </section>
@@ -760,6 +845,73 @@ export default function App() {
                   </div>
                 );
               })}
+            </section>
+
+            {/* Fleet Intelligence Grid */}
+            <section className="panel intel-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Fleet intelligence</p>
+                  <h2>Performance analytics</h2>
+                </div>
+                <span className="panel-count">{activeClients} active</span>
+              </div>
+
+              <div className="intel-grid">
+                <div className="intel-card">
+                  <div className="intel-card-icon green">
+                    <ShieldCheck size={18} />
+                  </div>
+                  <p className="intel-card-label">Billing success rate</p>
+                  <p className="intel-card-value">{billingSuccessRate.toFixed(1)}%</p>
+                  <p className="intel-card-sub">{totalBills} bills / {totalTicks} ticks</p>
+                </div>
+
+                <div className="intel-card">
+                  <div className="intel-card-icon blue">
+                    <DollarSign size={18} />
+                  </div>
+                  <p className="intel-card-label">Revenue / client</p>
+                  <p className="intel-card-value">${revenuePerClient.toFixed(6)}</p>
+                  <p className="intel-card-sub">{activeClients} active client{activeClients === 1 ? '' : 's'}</p>
+                </div>
+
+                <div className="intel-card">
+                  <div className="intel-card-icon violet">
+                    <Server size={18} />
+                  </div>
+                  <p className="intel-card-label">Revenue / backend</p>
+                  <p className="intel-card-value">${revenuePerBackend.toFixed(6)}</p>
+                  <p className="intel-card-sub">{runningBackends} running backend{runningBackends === 1 ? '' : 's'}</p>
+                </div>
+
+                <div className="intel-card">
+                  <div className={`intel-card-icon ${errorRate > 0 ? 'red' : 'green'}`}>
+                    <AlertCircle size={18} />
+                  </div>
+                  <p className="intel-card-label">Error rate</p>
+                  <p className={`intel-card-value ${errorRate > 0 ? 'danger' : ''}`}>{errorRate.toFixed(1)}%</p>
+                  <p className="intel-card-sub">{errorClients} error{errorClients === 1 ? '' : 's'} / {allClientsList.length} total</p>
+                </div>
+
+                <div className="intel-card">
+                  <div className="intel-card-icon cyan">
+                    <Gauge size={18} />
+                  </div>
+                  <p className="intel-card-label">Fleet utilization</p>
+                  <p className="intel-card-value">{fleetUtilization.toFixed(0)}%</p>
+                  <p className="intel-card-sub">{activeClients} / {allClientsList.length} clients active</p>
+                </div>
+
+                <div className="intel-card">
+                  <div className="intel-card-icon amber">
+                    <BarChart3 size={18} />
+                  </div>
+                  <p className="intel-card-label">Avg ticks / bills</p>
+                  <p className="intel-card-value">{avgTicksPerClient.toFixed(0)} / {avgBillsPerClient.toFixed(0)}</p>
+                  <p className="intel-card-sub">Per active client</p>
+                </div>
+              </div>
             </section>
 
             <section className="panel">
