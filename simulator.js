@@ -376,7 +376,19 @@ async function start() {
     pollEarnings();
     const earningsInterval = setInterval(pollEarnings, 15000);
 
-    for (let c = 0; c < scaleFactor; c++) {
+    let startIdx = 0;
+    let endIdx = scaleFactor;
+    if (process.env.INSTANCE_NAME === 'instance_1') {
+      startIdx = 0;
+      endIdx = Math.floor(scaleFactor / 2);
+    } else if (process.env.INSTANCE_NAME === 'instance_2') {
+      startIdx = Math.floor(scaleFactor / 2);
+      endIdx = scaleFactor;
+    }
+
+    console.log(`[Profile:${p.name}] Spawning client indices ${startIdx} to ${endIdx - 1} (${endIdx - startIdx} clients total)...`);
+
+    for (let c = startIdx; c < endIdx; c++) {
       const virtualClientId = c === 0 && p.clientId 
         ? p.clientId 
         : crypto.randomBytes(12).toString("hex");

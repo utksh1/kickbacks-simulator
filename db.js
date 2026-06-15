@@ -29,9 +29,9 @@ async function loadConfig() {
       await runPgQuery('CREATE TABLE IF NOT EXISTS revenue_history (timestamp TIMESTAMPTZ DEFAULT NOW(), profile_name VARCHAR(100), today_usd NUMERIC(10, 6), lifetime_usd NUMERIC(10, 6));');
       // Migration: Add instance_name column to revenue_history if it doesn't exist
       await runPgQuery('ALTER TABLE revenue_history ADD COLUMN IF NOT EXISTS instance_name VARCHAR(50) DEFAULT \'default\';');
-      const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', [INSTANCE_NAME]);
+      const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', ['default']);
       if (res.rows && res.rows.length > 0) {
-        console.log(`SYSTEM: Config loaded from Render PostgreSQL for instance: ${INSTANCE_NAME}.`);
+        console.log(`SYSTEM: Config loaded from Render PostgreSQL (using default row for unified token rotation).`);
         return res.rows[0].data;
       }
 
@@ -40,8 +40,8 @@ async function loadConfig() {
         try {
           const initialData = JSON.parse(process.env.INITIAL_CONFIG);
           if (Array.isArray(initialData) && initialData.length > 0) {
-            console.log(`SYSTEM: Postgres empty for ${INSTANCE_NAME}. Self-seeding with INITIAL_CONFIG...`);
-            await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', [INSTANCE_NAME, JSON.stringify(initialData)]);
+            console.log(`SYSTEM: Postgres empty. Self-seeding with INITIAL_CONFIG...`);
+            await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', ['default', JSON.stringify(initialData)]);
             return initialData;
           }
         } catch (parseErr) {
@@ -61,7 +61,7 @@ async function loadConfig() {
       await client.connect();
       const db = client.db('kickbacks');
       const col = db.collection('config');
-      const doc = await col.findOne({ _id: INSTANCE_NAME });
+      const doc = await col.findOne({ _id: 'default' });
       await client.close();
       if (doc && doc.data) {
         console.log("SYSTEM: Config loaded from MongoDB Atlas.");
@@ -75,7 +75,7 @@ async function loadConfig() {
   // Option C: Supabase REST API
   if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
     try {
-      const url = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.${INSTANCE_NAME}`;
+      const url = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.default`;
       const res = await fetch(url, {
         headers: {
           'apikey': process.env.SUPABASE_KEY,
@@ -110,8 +110,8 @@ async function saveConfig(config) {
   if (process.env.DATABASE_URL) {
     try {
       await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
-      await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', [INSTANCE_NAME, JSON.stringify(config)]);
-      console.log(`SYSTEM: Config saved to Render PostgreSQL for instance: ${INSTANCE_NAME}.`);
+      await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', ['default', JSON.stringify(config)]);
+      console.log(`SYSTEM: Config saved to Render PostgreSQL (unified default row).`);
       return;
     } catch (err) {
       console.error("SYSTEM: Render PostgreSQL save error:", err.message);
@@ -127,7 +127,7 @@ async function saveConfig(config) {
       const db = client.db('kickbacks');
       const col = db.collection('config');
       await col.updateOne(
-        { _id: INSTANCE_NAME },
+        { _id: 'default' },
         { $set: { data: config } },
         { upsert: true }
       );
@@ -151,13 +151,13 @@ async function saveConfig(config) {
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
-        body: JSON.stringify({ id: INSTANCE_NAME, data: config })
+        body: JSON.stringify({ id: 'default', data: config })
       });
       if (res.ok) {
         console.log("SYSTEM: Config saved to Supabase.");
         return;
       } else {
-        const patchUrl = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.${INSTANCE_NAME}`;
+        const patchUrl = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.default`;
         const patchRes = await fetch(patchUrl, {
           method: 'PATCH',
           headers: {
