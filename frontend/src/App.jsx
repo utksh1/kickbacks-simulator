@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal, 
-  Settings, LineChart, RefreshCw, LogOut, Plus, Trash2, 
-  Play, Square, AlertCircle, Ban, Server, Compass
+  Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal,
+  Settings, LineChart, RefreshCw, LogOut, Plus, Trash2,
+  Play, Square, AlertCircle, Ban, Server, Compass, Sparkles
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -30,6 +30,20 @@ const DEFAULT_INSTANCES = [
   'https://r.utksh.in',
   'https://r1.utksh.in'
 ];
+
+const TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: Activity },
+  { id: 'analytics', label: 'Analytics', icon: LineChart },
+  { id: 'config', label: 'Config', icon: Settings },
+  { id: 'logs', label: 'Logs', icon: Terminal }
+];
+
+const TAB_TITLES = {
+  dashboard: 'Fleet command',
+  analytics: 'Revenue trace',
+  config: 'Control settings',
+  logs: 'Live terminal'
+};
 
 export default function App() {
   const [password, setPassword] = useState(localStorage.getItem('dashboard_password') || '');
@@ -342,6 +356,7 @@ export default function App() {
 
   // Aggregate Metrics Calculations
   const onlineCount = Object.values(statuses).filter(s => s.online).length;
+  const runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
   let totalTodayRun = 0;
   let totalClientsCount = 0;
   let allClientsList = [];
@@ -373,6 +388,7 @@ export default function App() {
   });
 
   const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+  const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
 
   // Line Chart Data
   const renderChartData = () => {
@@ -449,12 +465,14 @@ export default function App() {
     return (
       <div className="auth-overlay">
         <div className="auth-card">
-          <div className="auth-header">
-            <h1></h1>
-            <p style={{ marginTop: '10px' }}>Loading Kickbacks Dashboard...</p>
+          <div className="brand-mark">
+            <Cpu size={24} />
           </div>
-          <div style={{ display: 'inline-block', width: '24px', height: '24px', border: '2px solid #0066cc', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></div>
-          <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+          <div className="auth-header">
+            <h1>Kickbacks Control</h1>
+            <p>Connecting to your render backends.</p>
+          </div>
+          <div className="loading-ring" aria-label="Loading" />
         </div>
       </div>
     );
@@ -464,9 +482,12 @@ export default function App() {
     return (
       <div className="auth-overlay">
         <form className="auth-card" onSubmit={handleLoginSubmit}>
+          <div className="brand-mark">
+            <ShieldAlert size={24} />
+          </div>
           <div className="auth-header">
-            <h1> KICKBACKS</h1>
-            <p>Enter your master security password</p>
+            <h1>Kickbacks Control</h1>
+            <p>Sign in to manage simulators, endpoints, and logs.</p>
           </div>
           <div className="form-group">
             <label htmlFor="authPassword">Password</label>
@@ -475,12 +496,12 @@ export default function App() {
               name="authPassword"
               type="password" 
               className="form-input" 
-              placeholder="Required"
+              placeholder="Master password"
               required 
             />
           </div>
           <button type="submit" className="btn-primary" disabled={authChecking}>
-            {authChecking ? 'Verifying...' : 'Sign In'}
+            {authChecking ? 'Verifying...' : 'Sign in'}
           </button>
           {authError && <div className="auth-error">{authError}</div>}
         </form>
@@ -489,83 +510,79 @@ export default function App() {
   }
 
   return (
-    <div>
-      {/* 1. Global Navigation ( style thin black bar) */}
+    <div className="app-shell">
       <nav className="global-nav">
         <div className="global-nav-content">
-          <div className="global-nav-logo" onClick={() => setActiveTab('dashboard')}>
-            <span style={{ fontSize: '16px', fontWeight: '600', letterSpacing: '-0.02em', marginRight: '6px' }}></span>
-            <span style={{ fontSize: '13px', fontWeight: '600', letterSpacing: '-0.02em' }}>KICKBACKS</span>
+          <button className="global-nav-logo" onClick={() => setActiveTab('dashboard')}>
+            <span className="logo-glyph">
+              <Cpu size={16} />
+            </span>
+            <span>Kickbacks</span>
+          </button>
+
+          <div className="global-nav-links" role="tablist" aria-label="Primary navigation">
+            {TABS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                className={`global-nav-item ${activeTab === id ? 'active' : ''}`}
+                onClick={() => setActiveTab(id)}
+                role="tab"
+                aria-selected={activeTab === id}
+              >
+                <Icon size={14} />
+                <span>{label}</span>
+              </button>
+            ))}
           </div>
 
-          <div className="global-nav-links">
-            <button 
-              className={`global-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              Dashboard
-            </button>
-            <button 
-              className={`global-nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
-              onClick={() => setActiveTab('analytics')}
-            >
-              Analytics
-            </button>
-            <button 
-              className={`global-nav-item ${activeTab === 'config' ? 'active' : ''}`}
-              onClick={() => setActiveTab('config')}
-            >
-              Configuration
-            </button>
-            <button 
-              className={`global-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
-              onClick={() => setActiveTab('logs')}
-            >
-              Terminal Logs
-            </button>
-          </div>
-
-          <button 
+          <button
             className="global-nav-logout"
             onClick={handleLogout}
-            title="Sign Out"
+            title="Sign out"
+            aria-label="Sign out"
           >
-            <LogOut size={14} />
+            <LogOut size={16} />
           </button>
         </div>
       </nav>
 
-      {/* 2. Sub-Nav Frosted (category navigation bar) */}
       <nav className="sub-nav-frosted">
         <div className="sub-nav-content">
-          <h2 className="sub-nav-title">
-            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
-          </h2>
-          
+          <div>
+            <p className="sub-nav-kicker">Control surface</p>
+            <h2 className="sub-nav-title">{activeTitle}</h2>
+          </div>
+
           <div className="sub-nav-right">
-            <div className="sub-nav-status">
-              <span className="status-dot-active"></span>
-              <span>{onlineCount} of {instances.length} Backends Online</span>
+            <div className="status-pill">
+              <span className={onlineCount ? 'status-dot-active' : 'status-dot-inactive'}></span>
+              <span>{onlineCount}/{instances.length} online</span>
+            </div>
+            <div className="status-pill muted">
+              <Activity size={14} />
+              <span>{runningBackends} running</span>
             </div>
 
             {activeTab === 'dashboard' && (
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button className="btn-primary" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={startAllSimulators}>
-                  Start All
+              <div className="command-group">
+                <button className="btn-primary compact" onClick={startAllSimulators}>
+                  <Play size={14} />
+                  Start all
                 </button>
-                <button className="btn-secondary-pill danger" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={stopAllSimulators}>
-                  Stop All
+                <button className="btn-secondary-pill danger compact" onClick={stopAllSimulators}>
+                  <Square size={13} />
+                  Stop all
                 </button>
               </div>
             )}
 
-            <button 
-              className="btn-secondary-pill" 
-              style={{ padding: '6px 10px' }}
+            <button
+              className="icon-button"
               onClick={() => setRefreshTrigger(p => p + 1)}
-              title="Refresh Stats"
+              title="Refresh stats"
+              aria-label="Refresh stats"
             >
-              <RefreshCw size={12} />
+              <RefreshCw size={15} />
             </button>
           </div>
         </div>
