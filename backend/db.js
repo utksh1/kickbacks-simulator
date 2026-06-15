@@ -6,18 +6,31 @@ const INSTANCE_NAME = process.env.INSTANCE_NAME || 'default';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const { Pool } = require('pg');
+
+let pool = null;
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 5, // Small pool size per instance to stay safely below Render free Postgres connection limit
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000
+  });
+
+  pool.on('error', (err) => {
+    console.error('DATABASE: Unexpected error on idle client', err.message);
+  });
+}
+
 async function runPgQuery(query, params = [], retries = 3, delay = 1000) {
-  const { Client } = require('pg');
-  
+  if (!pool) {
+    throw new Error("PostgreSQL pool is not initialized (DATABASE_URL missing).");
+  }
+
   for (let attempt = 1; attempt <= retries; attempt++) {
-    const client = new Client({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false } // Required for Render PostgreSQL connections
-    });
-    
     try {
-      await client.connect();
-      const res = await client.query(query, params);
+      const res = await pool.query(query, params);
       return res;
     } catch (err) {
       console.error(`DATABASE: PostgreSQL query error (Attempt ${attempt}/${retries}):`, err.message);
@@ -26,12 +39,6 @@ async function runPgQuery(query, params = [], retries = 3, delay = 1000) {
       }
       await sleep(delay);
       delay *= 2; // Exponential backoff
-    } finally {
-      try {
-        await client.end();
-      } catch (endErr) {
-        // Ignore connection close errors
-      }
     }
   }
 }
