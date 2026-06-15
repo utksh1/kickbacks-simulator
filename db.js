@@ -29,6 +29,20 @@ async function loadConfig() {
         console.log("SYSTEM: Config loaded from Render PostgreSQL.");
         return res.rows[0].data;
       }
+
+      // If database is empty, check for INITIAL_CONFIG env var to self-seed
+      if (process.env.INITIAL_CONFIG) {
+        try {
+          const initialData = JSON.parse(process.env.INITIAL_CONFIG);
+          if (Array.isArray(initialData) && initialData.length > 0) {
+            console.log("SYSTEM: Postgres empty. Self-seeding with INITIAL_CONFIG...");
+            await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', ['default', JSON.stringify(initialData)]);
+            return initialData;
+          }
+        } catch (parseErr) {
+          console.error("SYSTEM: Error parsing INITIAL_CONFIG:", parseErr.message);
+        }
+      }
     } catch (err) {
       console.error("SYSTEM: Render PostgreSQL load error (falling back):", err.message);
     }

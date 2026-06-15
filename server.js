@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { fork } = require('child_process');
 const path = require('path');
