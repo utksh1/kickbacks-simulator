@@ -16,11 +16,23 @@ class TokenManager {
     this.profile = profile;
     this.index = index;
     this.config = config;
-    this.accessToken = null;
+    this.accessToken = profile.accessToken || null;
     this.refreshPromise = null;
   }
 
   async getAccessToken() {
+    try {
+      const latestConfig = await loadConfig();
+      const currentProfile = latestConfig[this.index];
+      if (currentProfile && currentProfile.accessToken) {
+        this.accessToken = currentProfile.accessToken;
+        this.profile.refreshToken = currentProfile.refreshToken;
+        this.profile.accessToken = currentProfile.accessToken;
+      }
+    } catch (err) {
+      console.warn(`[Auth:${this.profile.name}] Failed to load latest config from DB inside getAccessToken:`, err.message);
+    }
+
     if (this.accessToken) return this.accessToken;
     return this.refresh();
   }
@@ -30,6 +42,20 @@ class TokenManager {
 
     this.refreshPromise = (async () => {
       for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const latestConfig = await loadConfig();
+          const currentProfile = latestConfig[this.index];
+          if (currentProfile && currentProfile.accessToken && currentProfile.refreshToken !== this.profile.refreshToken) {
+            console.log(`[Auth:${this.profile.name}] Detected another instance refreshed the token. Using updated token.`);
+            this.accessToken = currentProfile.accessToken;
+            this.profile.refreshToken = currentProfile.refreshToken;
+            this.profile.accessToken = currentProfile.accessToken;
+            return this.accessToken;
+          }
+        } catch (err) {
+          console.warn(`[Auth:${this.profile.name}] DB check failed inside refresh:`, err.message);
+        }
+
         console.log(`[Auth:${this.profile.name}] Refreshing access token (Attempt ${attempt}/${retries})...`);
         try {
           const res = await fetch(`${BACKEND_BASE}/v1/auth/refresh`, {
@@ -41,7 +67,7 @@ class TokenManager {
           if (res.status === 429) {
             console.warn(`[Auth:${this.profile.name}] Rate limited (429). Retrying in ${delay / 1000}s...`);
             await sleep(delay);
-            delay *= 2; // Exponential backoff
+            delay *= 2;
             continue;
           }
 
@@ -57,12 +83,20 @@ class TokenManager {
           }
 
           this.accessToken = body.access_token;
-          if (body.refresh_token && body.refresh_token !== this.profile.refreshToken) {
-            console.log(`[Auth:${this.profile.name}] Refresh token rotated. Saving config...`);
-            this.profile.refreshToken = body.refresh_token;
-            this.config[this.index] = this.profile;
-            await saveConfig(this.config);
+          const newRefreshToken = body.refresh_token || this.profile.refreshToken;
+
+          console.log(`[Auth:${this.profile.name}] Refresh token rotated successfully. Saving updated config with accessToken...`);
+          this.profile.refreshToken = newRefreshToken;
+          this.profile.accessToken = this.accessToken;
+
+          try {
+            const latestConfig = await loadConfig();
+            latestConfig[this.index] = this.profile;
+            await saveConfig(latestConfig);
+          } catch (dbErr) {
+            console.error(`[Auth:${this.profile.name}] Failed to save updated token to DB:`, dbErr.message);
           }
+
           return this.accessToken;
         } catch (err) {
           console.error(`[Auth:${this.profile.name}] Network error on attempt ${attempt}:`, err.message);
@@ -84,6 +118,7 @@ class TokenManager {
 
   invalidateToken() {
     this.accessToken = null;
+    this.profile.accessToken = null;
   }
 
   async getEarnings() {
