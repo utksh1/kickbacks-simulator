@@ -378,12 +378,13 @@ async function start() {
 
     let startIdx = 0;
     let endIdx = scaleFactor;
-    if (process.env.INSTANCE_NAME === 'instance_1') {
-      startIdx = 0;
-      endIdx = Math.floor(scaleFactor / 2);
-    } else if (process.env.INSTANCE_NAME === 'instance_2') {
-      startIdx = Math.floor(scaleFactor / 2);
-      endIdx = scaleFactor;
+    const instanceMatch = process.env.INSTANCE_NAME?.match(/instance_(\d+)/);
+    if (instanceMatch) {
+      const idx = parseInt(instanceMatch[1], 10);
+      const totalInstances = 6;
+      const sliceSize = Math.floor(scaleFactor / totalInstances);
+      startIdx = (idx - 1) * sliceSize;
+      endIdx = idx * sliceSize;
     }
 
     console.log(`[Profile:${p.name}] Spawning client indices ${startIdx} to ${endIdx - 1} (${endIdx - startIdx} clients total)...`);

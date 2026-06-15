@@ -16,22 +16,29 @@ vi.stubGlobal('fetch', vi.fn().mockImplementation((url) => {
     });
   }
   if (url.includes('/api/status')) {
-    const isInstance2 = url.includes('r1.utksh.in');
+    const match = url.match(/r(\d*)\.utksh\.in/);
+    const instanceIndex = match ? (match[1] === "" ? 1 : parseInt(match[1], 10) + 1) : 1;
+    const instanceName = `instance_${instanceIndex}`;
+    const clientIndex = (instanceIndex - 1) * 10 + 1;
+    const clientName = `client_primary_v${clientIndex}`;
+    const clientId = `${instanceIndex}a1844a55570cd700d300cb0`;
+    const adTitle = instanceIndex === 1 ? "Attio" : (instanceIndex === 2 ? "Linear" : `PH_Ad_${instanceIndex}`);
+
     return Promise.resolve({
       ok: true,
       status: 200,
       json: () => Promise.resolve({
         running: true,
-        instanceName: isInstance2 ? "instance_2" : "instance_1",
-        configProfiles: [{ name: "client_primary", scale: 10 }],
+        instanceName: instanceName,
+        configProfiles: [{ name: "client_primary", scale: 60 }],
         profiles: [],
         clients: [
           {
-            name: isInstance2 ? "client_primary_v11" : "client_primary_v1",
-            instanceName: isInstance2 ? "instance_2" : "instance_1",
-            clientId: isInstance2 ? "2a1844a55570cd700d300cb0" : "1a1844a55570cd700d300cb0",
-            adTitle: isInstance2 ? "Linear" : "Attio",
-            adId: isInstance2 ? "9842108b-1697-5310-af8a-8a7445cc6f4a" : "8842108b-1697-5310-af8a-8a7445cc6f4a",
+            name: clientName,
+            instanceName: instanceName,
+            clientId: clientId,
+            adTitle: adTitle,
+            adId: `${instanceIndex}842108b-1697-5310-af8a-8a7445cc6f4a`,
             ticks: 361,
             billing_count: 25,
             revenue_usd: "0.039816",

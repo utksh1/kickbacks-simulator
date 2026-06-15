@@ -11,7 +11,11 @@ const MuiLineChart = lazy(() =>
 
 const DEFAULT_INSTANCES = [
   'https://r.utksh.in',
-  'https://r1.utksh.in'
+  'https://r1.utksh.in',
+  'https://r2.utksh.in',
+  'https://r3.utksh.in',
+  'https://r4.utksh.in',
+  'https://r5.utksh.in'
 ];
 
 const TABS = [
