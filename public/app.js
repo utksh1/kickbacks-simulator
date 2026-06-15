@@ -6,6 +6,7 @@ const elements = {
   loginError: document.getElementById('login-error'),
   
   btnLogout: document.getElementById('btn-logout'),
+  dashboardTitle: document.getElementById('dashboard-title'),
   serviceStatus: document.getElementById('service-status'),
   statusText: document.querySelector('#service-status .status-text'),
   btnToggle: document.getElementById('btn-toggle'),
@@ -130,6 +131,12 @@ async function fetchStatus() {
   try {
     const res = await authFetch('/api/status');
     const data = await res.json();
+    
+    if (data.instanceName && data.instanceName !== 'default') {
+      elements.dashboardTitle.textContent = `Kickbacks Simulator Dashboard - ${data.instanceName}`;
+    } else {
+      elements.dashboardTitle.textContent = 'Kickbacks Simulator Dashboard';
+    }
     
     updateHeader(data.running);
     updateEarnings(data.totals);

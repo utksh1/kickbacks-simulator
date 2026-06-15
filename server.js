@@ -202,6 +202,7 @@ app.get('/api/status', checkAuth, async (req, res) => {
 
   res.json({
     running: simulatorProcess !== null,
+    instanceName: process.env.INSTANCE_NAME || 'default',
     configProfiles,
     profiles: Object.values(profiles),
     clients: Object.values(clients),
