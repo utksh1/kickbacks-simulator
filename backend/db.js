@@ -195,6 +195,30 @@ async function updateClientTick(clientName, instanceName, clientId, adId, adTitl
   }
 }
 
+async function updateClientAd(clientName, instanceName, clientId, adId, adTitle, status) {
+  if (process.env.DATABASE_URL) {
+    try {
+      const query = `
+        INSERT INTO client_stats (client_name, instance_name, client_id, ad_id, ad_title, ticks, last_status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, 0, $6, NOW())
+        ON CONFLICT (client_name) DO UPDATE SET
+          instance_name = EXCLUDED.instance_name,
+          client_id = EXCLUDED.client_id,
+          ad_id = EXCLUDED.ad_id,
+          ad_title = EXCLUDED.ad_title,
+          last_status = CASE 
+            WHEN client_stats.last_status = 'Stopped' OR client_stats.last_status = 'inactive' OR client_stats.last_status IS NULL THEN EXCLUDED.last_status
+            ELSE client_stats.last_status
+          END,
+          updated_at = NOW();
+      `;
+      await runPgQuery(query, [clientName, instanceName, clientId, adId, adTitle, status]);
+    } catch (err) {
+      console.error("SYSTEM: updateClientAd DB error:", err.message);
+    }
+  }
+}
+
 async function updateClientBilling(clientName, status, isSuccess) {
   if (process.env.DATABASE_URL) {
     try {
@@ -238,6 +262,7 @@ module.exports = {
   getRevenueHistory,
   getClientStats,
   updateClientTick,
+  updateClientAd,
   updateClientBilling,
   distributeClientRevenue,
   runPgQuery

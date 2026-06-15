@@ -9,6 +9,7 @@ const {
   getRevenueHistory,
   getClientStats,
   updateClientTick,
+  updateClientAd,
   updateClientBilling,
   distributeClientRevenue
 } = require('./db');
@@ -270,7 +271,7 @@ function startSimulator() {
       }
     } else if (msg.type === 'client_ad') {
       const { clientName, clientId, adId, adTitle } = msg;
-      updateClientTick(clientName, process.env.INSTANCE_NAME || 'default', clientId, adId, adTitle, 'Initial', null).catch(err => {
+      updateClientAd(clientName, process.env.INSTANCE_NAME || 'default', clientId, adId, adTitle, 'Success').catch(err => {
         console.error("SYSTEM: Error updating client ad in DB:", err.message);
       });
     } else if (msg.type === 'client_tick') {

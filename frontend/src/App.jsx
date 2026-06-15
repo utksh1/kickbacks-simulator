@@ -11,8 +11,7 @@ const MuiLineChart = lazy(() =>
 
 const DEFAULT_INSTANCES = [
   'https://r.utksh.in',
-  'https://r1.utksh.in',
-  'https://revenue.utksh.bar'
+  'https://r1.utksh.in'
 ];
 
 const TABS = [
@@ -37,7 +36,8 @@ export default function App() {
 
   const [instances, setInstances] = useState(() => {
     const saved = localStorage.getItem('dashboard_instances');
-    const list = saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
+    let list = saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
+    list = list.filter(item => !item.includes('revenue.utksh.bar'));
     const merged = [...list];
     DEFAULT_INSTANCES.forEach(item => {
       if (!merged.includes(item)) {
@@ -52,7 +52,8 @@ export default function App() {
   const [statuses, setStatuses] = useState({});
   const [loading, setLoading] = useState(() => Boolean(localStorage.getItem('dashboard_password')));
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [cachedMetrics, setCachedMetrics] = useState(() => {
+
+  const getCachedMetrics = useCallback(() => {
     const saved = localStorage.getItem('kickbacks_cached_metrics');
     return saved ? JSON.parse(saved) : {
       totalTodayRun: 0,
@@ -62,7 +63,7 @@ export default function App() {
       uniqueProfilesCount: 0,
       allClientsList: []
     };
-  });
+  }, []);
 
   const [selectedLogInstance, setSelectedLogInstance] = useState(instances[0] || '');
   const [configJson, setConfigJson] = useState('[]');
@@ -158,6 +159,53 @@ export default function App() {
     const interval = setInterval(fetchAllStatuses, 5000);
     return () => clearInterval(interval);
   }, [isAuthorized, instances, password, refreshTrigger]);
+
+  // Save status metrics to localStorage when statuses change
+  useEffect(() => {
+    const onlineCount = Object.values(statuses).filter(s => s.online).length;
+    if (onlineCount === 0) return;
+
+    let runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
+    let totalTodayRun = 0;
+    let totalClientsCount = 0;
+    let allClientsList = [];
+    const uniqueProfiles = {};
+
+    Object.keys(statuses).forEach(url => {
+      const s = statuses[url];
+      if (s && s.online) {
+        totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
+        const runningClients = s.clients || [];
+        allClientsList = [
+          ...allClientsList,
+          ...runningClients.map(c => ({
+            ...c,
+            instanceUrl: url,
+            instanceName: s.instanceName
+          }))
+        ];
+        totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
+        (s.profiles || []).forEach(p => {
+          if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
+            uniqueProfiles[p.name] = p;
+          }
+        });
+      }
+    });
+
+    const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+
+    const newMetrics = {
+      totalTodayRun,
+      totalCurrentToday,
+      totalClientsCount,
+      runningBackends,
+      uniqueProfilesCount: Object.keys(uniqueProfiles).length,
+      allClientsList
+    };
+
+    localStorage.setItem('kickbacks_cached_metrics', JSON.stringify(newMetrics));
+  }, [statuses]);
 
   // Fetch histories when Analytics tab is selected
   useEffect(() => {
@@ -371,6 +419,7 @@ export default function App() {
   let allClientsList = [];
   const uniqueProfiles = {};
   let totalCurrentToday = 0;
+  let uniqueProfilesCount = 0;
 
   if (onlineCount > 0) {
     runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
@@ -399,27 +448,18 @@ export default function App() {
       }
     });
     totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+    uniqueProfilesCount = Object.keys(uniqueProfiles).length;
 
-    // Update localStorage cache with overall global metrics
-    const newMetrics = {
-      totalTodayRun,
-      totalCurrentToday,
-      totalClientsCount,
-      runningBackends,
-      uniqueProfilesCount: Object.keys(uniqueProfiles).length,
-      allClientsList
-    };
-    if (JSON.stringify(newMetrics) !== JSON.stringify(cachedMetrics)) {
-      localStorage.setItem('kickbacks_cached_metrics', JSON.stringify(newMetrics));
-      setCachedMetrics(newMetrics);
-    }
+
   } else {
     // When offline, fallback to the overall global cached metrics
-    runningBackends = cachedMetrics.runningBackends;
-    totalTodayRun = cachedMetrics.totalTodayRun;
-    totalClientsCount = cachedMetrics.totalClientsCount;
-    totalCurrentToday = cachedMetrics.totalCurrentToday;
-    allClientsList = cachedMetrics.allClientsList || [];
+    const cached = getCachedMetrics();
+    runningBackends = cached.runningBackends;
+    totalTodayRun = cached.totalTodayRun;
+    totalClientsCount = cached.totalClientsCount;
+    totalCurrentToday = cached.totalCurrentToday;
+    uniqueProfilesCount = cached.uniqueProfilesCount;
+    allClientsList = cached.allClientsList || [];
   }
 
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
@@ -650,7 +690,7 @@ export default function App() {
                 <Cpu size={18} />
                 <div>
                   <p className="metric-label">Profiles tracked</p>
-                  <p className="metric-value">{onlineCount > 0 ? Object.keys(uniqueProfiles).length : cachedMetrics.uniqueProfilesCount}</p>
+                  <p className="metric-value">{uniqueProfilesCount}</p>
                 </div>
               </div>
             </section>
