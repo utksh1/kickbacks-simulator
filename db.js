@@ -3,8 +3,38 @@ const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 
+async function runPgQuery(query, params = []) {
+  const { Client } = require('pg');
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // Required for Render PostgreSQL connections
+  });
+  await client.connect();
+  try {
+    const res = await client.query(query, params);
+    return res;
+  } finally {
+    await client.end();
+  }
+}
+
 async function loadConfig() {
-  // Option A: MongoDB Atlas
+  // Option A: Render PostgreSQL (DATABASE_URL)
+  if (process.env.DATABASE_URL) {
+    try {
+      // Create table if not exists
+      await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
+      const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', ['default']);
+      if (res.rows && res.rows.length > 0) {
+        console.log("SYSTEM: Config loaded from Render PostgreSQL.");
+        return res.rows[0].data;
+      }
+    } catch (err) {
+      console.error("SYSTEM: Render PostgreSQL load error (falling back):", err.message);
+    }
+  }
+
+  // Option B: MongoDB Atlas
   if (process.env.MONGODB_URI) {
     try {
       const { MongoClient } = require('mongodb');
@@ -23,7 +53,7 @@ async function loadConfig() {
     }
   }
 
-  // Option B: Supabase REST API
+  // Option C: Supabase REST API
   if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
     try {
       const url = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.default`;
@@ -57,7 +87,19 @@ async function loadConfig() {
 }
 
 async function saveConfig(config) {
-  // Option A: MongoDB Atlas
+  // Option A: Render PostgreSQL (DATABASE_URL)
+  if (process.env.DATABASE_URL) {
+    try {
+      await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
+      await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', ['default', JSON.stringify(config)]);
+      console.log("SYSTEM: Config saved to Render PostgreSQL.");
+      return;
+    } catch (err) {
+      console.error("SYSTEM: Render PostgreSQL save error:", err.message);
+    }
+  }
+
+  // Option B: MongoDB Atlas
   if (process.env.MONGODB_URI) {
     try {
       const { MongoClient } = require('mongodb');
@@ -78,11 +120,10 @@ async function saveConfig(config) {
     }
   }
 
-  // Option B: Supabase REST API
+  // Option C: Supabase REST API
   if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
     try {
       const url = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config`;
-      // Use POST upsert
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -97,7 +138,6 @@ async function saveConfig(config) {
         console.log("SYSTEM: Config saved to Supabase.");
         return;
       } else {
-        // Fallback to update / PATCH if POST upsert fails or requires resolution
         const patchUrl = `${process.env.SUPABASE_URL}/rest/v1/kickbacks_config?id=eq.default`;
         const patchRes = await fetch(patchUrl, {
           method: 'PATCH',
