@@ -3,11 +3,27 @@ const express = require('express');
 const { fork } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { loadConfig } = require('./db');
+const { loadConfig, saveRevenueHistory, getRevenueHistory } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = path.join(__dirname, 'config.json');
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'Ankitsin';
+
+function checkAuth(req, res, next) {
+  if (!DASHBOARD_PASSWORD) {
+    return next();
+  }
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.substring(7);
+  if (token !== DASHBOARD_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -79,6 +95,16 @@ function startSimulator() {
         prof.earnedTodayRun = Math.max(0, (todayMicros - prof.initialTodayMicros) / 1000000);
         prof.earnedLifetimeRun = Math.max(0, (lifetimeMicros - prof.initialLifetimeMicros) / 1000000);
       }
+
+      // Log history to DB periodically (throttled to once every 15 minutes per profile)
+      const nowTime = Date.now();
+      const prof = profiles[profileName];
+      if (prof && (!prof.lastLoggedDbTime || (nowTime - prof.lastLoggedDbTime >= 15 * 60 * 1000))) {
+        prof.lastLoggedDbTime = nowTime;
+        saveRevenueHistory(profileName, todayUsd, lifetimeUsd).catch(err => {
+          console.error("SYSTEM: Error logging revenue history snapshot:", err.message);
+        });
+      }
     } else if (msg.type === 'client_ad') {
       const { clientName, clientId, adId, adTitle } = msg;
       if (!clients[clientName]) {
@@ -145,7 +171,15 @@ function stopSimulator() {
 startSimulator();
 
 // API routes
-app.get('/api/status', async (req) => {
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+  if (password === DASHBOARD_PASSWORD) {
+    return res.json({ success: true });
+  }
+  return res.status(401).json({ error: 'Invalid password' });
+});
+
+app.get('/api/status', checkAuth, async (req, res) => {
   let configProfiles = [];
   try {
     configProfiles = await loadConfig();
@@ -166,7 +200,7 @@ app.get('/api/status', async (req) => {
     totalCurrentLifetime += p.currentLifetimeUsd;
   });
 
-  req.res.json({
+  res.json({
     running: simulatorProcess !== null,
     configProfiles,
     profiles: Object.values(profiles),
@@ -181,19 +215,59 @@ app.get('/api/status', async (req) => {
   });
 });
 
-app.post('/api/start', (req) => {
+app.post('/api/start', checkAuth, (req, res) => {
   const success = startSimulator();
-  req.res.json({ success });
+  res.json({ success });
 });
 
-app.post('/api/stop', (req) => {
+app.post('/api/stop', checkAuth, (req, res) => {
   const success = stopSimulator();
-  req.res.json({ success });
+  res.json({ success });
 });
 
-app.post('/api/clear-logs', (req) => {
+app.post('/api/clear-logs', checkAuth, (req, res) => {
   logs = [];
-  req.res.json({ success: true });
+  res.json({ success: true });
+});
+
+app.get('/api/config', checkAuth, async (req, res) => {
+  try {
+    const config = await loadConfig();
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/config', checkAuth, async (req, res) => {
+  try {
+    const newConfig = req.body;
+    if (!Array.isArray(newConfig)) {
+      return res.status(400).json({ error: 'Config must be an array' });
+    }
+    const { saveConfig } = require('./db');
+    await saveConfig(newConfig);
+    
+    // Automatically restart simulator to apply changes
+    appendLog("SYSTEM: Configuration updated via settings panel. Restarting simulator...");
+    stopSimulator();
+    setTimeout(() => {
+      startSimulator();
+    }, 1000);
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/revenue-history', checkAuth, async (req, res) => {
+  try {
+    const history = await getRevenueHistory(24);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {

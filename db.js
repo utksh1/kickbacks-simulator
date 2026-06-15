@@ -22,8 +22,9 @@ async function loadConfig() {
   // Option A: Render PostgreSQL (DATABASE_URL)
   if (process.env.DATABASE_URL) {
     try {
-      // Create table if not exists
+      // Create tables if not exist
       await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
+      await runPgQuery('CREATE TABLE IF NOT EXISTS revenue_history (timestamp TIMESTAMPTZ DEFAULT NOW(), profile_name VARCHAR(100), today_usd NUMERIC(10, 6), lifetime_usd NUMERIC(10, 6));');
       const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', ['default']);
       if (res.rows && res.rows.length > 0) {
         console.log("SYSTEM: Config loaded from Render PostgreSQL.");
@@ -182,4 +183,37 @@ async function saveConfig(config) {
   }
 }
 
-module.exports = { loadConfig, saveConfig };
+async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
+  if (process.env.DATABASE_URL) {
+    try {
+      await runPgQuery(
+        'INSERT INTO revenue_history (profile_name, today_usd, lifetime_usd) VALUES ($1, $2, $3);',
+        [profileName, todayUsd, lifetimeUsd]
+      );
+      console.log(`SYSTEM: Saved revenue snapshot for ${profileName} ($${todayUsd}).`);
+    } catch (err) {
+      console.error("SYSTEM: Render PostgreSQL saveRevenueHistory error:", err.message);
+    }
+  }
+}
+
+async function getRevenueHistory(limitHours = 24) {
+  if (process.env.DATABASE_URL) {
+    try {
+      const res = await runPgQuery(
+        `SELECT timestamp, profile_name, today_usd, lifetime_usd 
+         FROM revenue_history 
+         WHERE timestamp >= NOW() - $1 * INTERVAL '1 hour' 
+         ORDER BY timestamp ASC;`,
+        [limitHours]
+      );
+      return res.rows || [];
+    } catch (err) {
+      console.error("SYSTEM: Render PostgreSQL getRevenueHistory error:", err.message);
+      return [];
+    }
+  }
+  return [];
+}
+
+module.exports = { loadConfig, saveConfig, saveRevenueHistory, getRevenueHistory };
