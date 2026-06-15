@@ -425,7 +425,19 @@ app.get('/api/status', checkAuth, async (req, res) => {
     instanceName: process.env.INSTANCE_NAME || 'default',
     configProfiles,
     profiles: Object.values(profiles),
-    clients: dbClients, // Serve client statistics directly from PostgreSQL
+    clients: dbClients.map(c => ({
+      name: c.client_name,
+      instanceName: c.instance_name,
+      clientId: c.client_id,
+      adTitle: c.ad_title,
+      adId: c.ad_id,
+      ticks: c.ticks,
+      billing_count: c.billing_count,
+      revenue_usd: c.revenue_usd,
+      lastStatus: c.last_status,
+      lastTickTime: c.last_tick_time,
+      updatedAt: c.updated_at
+    })),
     totals: {
       earnedTodayRun: totalEarnedTodayRun.toFixed(6),
       earnedLifetimeRun: totalEarnedLifetimeRun.toFixed(6),

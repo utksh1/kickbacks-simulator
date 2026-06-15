@@ -1,29 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { 
   Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal,
-  Settings, LineChart, RefreshCw, LogOut, Plus, Trash2,
+  Settings, LineChart as LineChartIcon, RefreshCw, LogOut, Plus, Trash2,
   Play, Square, AlertCircle, Ban, Server, Compass, Sparkles
 } from 'lucide-react';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend
-} from 'chart.js';
-import { Line } from 'react-chartjs-2';
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend
+const MuiLineChart = lazy(() =>
+  import('@mui/x-charts/LineChart').then((module) => ({ default: module.LineChart }))
 );
 
 const DEFAULT_INSTANCES = [
@@ -33,7 +16,7 @@ const DEFAULT_INSTANCES = [
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: Activity },
-  { id: 'analytics', label: 'Analytics', icon: LineChart },
+  { id: 'analytics', label: 'Analytics', icon: LineChartIcon },
   { id: 'config', label: 'Config', icon: Settings },
   { id: 'logs', label: 'Logs', icon: Terminal }
 ];
@@ -59,8 +42,19 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [statuses, setStatuses] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem('dashboard_password')));
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [cachedMetrics, setCachedMetrics] = useState(() => {
+    const saved = localStorage.getItem('kickbacks_cached_metrics');
+    return saved ? JSON.parse(saved) : {
+      totalTodayRun: 0,
+      totalCurrentToday: 0,
+      totalClientsCount: 0,
+      runningBackends: 0,
+      uniqueProfilesCount: 0,
+      allClientsList: []
+    };
+  });
 
   const [selectedLogInstance, setSelectedLogInstance] = useState(instances[0] || '');
   const [configJson, setConfigJson] = useState('[]');
@@ -70,22 +64,47 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const logsEndRef = useRef(null);
+  const initialAuthCheckedRef = useRef(!password);
+
+  const verifyPassword = useCallback(async (pass) => {
+    setAuthChecking(true);
+    setAuthError('');
+    const testUrl = instances[0] || 'https://r.utksh.in';
+    try {
+      const res = await fetch(`${testUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pass })
+      });
+      if (res.ok) {
+        localStorage.setItem('dashboard_password', pass);
+        setPassword(pass);
+        setIsAuthorized(true);
+      } else {
+        setAuthError('Invalid master password.');
+      }
+    } catch (err) {
+      console.warn("Auth check failed:", err.message);
+      // Fallback in case of CORS / offline
+      localStorage.setItem('dashboard_password', pass);
+      setPassword(pass);
+      setIsAuthorized(true);
+    } finally {
+      setAuthChecking(false);
+      setLoading(false);
+    }
+  }, [instances]);
 
   // Initial Auth Check
   useEffect(() => {
-    if (password) {
-      verifyPassword(password);
-    } else {
-      setLoading(false);
-    }
-  }, []);
+    if (initialAuthCheckedRef.current || !password) return;
+    initialAuthCheckedRef.current = true;
+    verifyPassword(password);
+  }, [password, verifyPassword]);
 
   // Save instances list
   useEffect(() => {
     localStorage.setItem('dashboard_instances', JSON.stringify(instances));
-    if (instances.length > 0 && !selectedLogInstance) {
-      setSelectedLogInstance(instances[0]);
-    }
   }, [instances]);
 
   // Status Polling Loop
@@ -163,12 +182,18 @@ export default function App() {
 
   // Load config JSON into configurator
   useEffect(() => {
-    if (activeTab === 'config') {
-      const onlineInstance = Object.keys(statuses).find(url => statuses[url]?.online);
-      if (onlineInstance && statuses[onlineInstance]?.configProfiles) {
-        setConfigJson(JSON.stringify(statuses[onlineInstance].configProfiles, null, 2));
-      }
+    if (activeTab !== 'config') return undefined;
+
+    const onlineInstance = Object.keys(statuses).find(url => statuses[url]?.online);
+    if (!onlineInstance || !statuses[onlineInstance]?.configProfiles) {
+      return undefined;
     }
+
+    const timer = window.setTimeout(() => {
+      setConfigJson(JSON.stringify(statuses[onlineInstance].configProfiles, null, 2));
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [activeTab, statuses]);
 
   // Auto-scroll log console
@@ -177,35 +202,6 @@ export default function App() {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [statuses, selectedLogInstance]);
-
-  const verifyPassword = async (pass) => {
-    setAuthChecking(true);
-    setAuthError('');
-    const testUrl = instances[0] || 'https://r.utksh.in';
-    try {
-      const res = await fetch(`${testUrl}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pass })
-      });
-      if (res.ok) {
-        localStorage.setItem('dashboard_password', pass);
-        setPassword(pass);
-        setIsAuthorized(true);
-      } else {
-        setAuthError('Invalid master password.');
-      }
-    } catch (err) {
-      console.warn("Auth check failed:", err.message);
-      // Fallback in case of CORS / offline
-      localStorage.setItem('dashboard_password', pass);
-      setPassword(pass);
-      setIsAuthorized(true);
-    } finally {
-      setAuthChecking(false);
-      setLoading(false);
-    }
-  };
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
@@ -237,7 +233,11 @@ export default function App() {
 
   const handleRemoveInstance = (url) => {
     if (window.confirm(`Are you sure you want to remove instance: ${url}?`)) {
-      setInstances(instances.filter(u => u !== url));
+      const nextInstances = instances.filter(u => u !== url);
+      setInstances(nextInstances);
+      if (selectedLogInstance === url) {
+        setSelectedLogInstance(nextInstances[0] || '');
+      }
     }
   };
 
@@ -356,45 +356,69 @@ export default function App() {
 
   // Aggregate Metrics Calculations
   const onlineCount = Object.values(statuses).filter(s => s.online).length;
-  const runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
+  
+  let runningBackends = 0;
   let totalTodayRun = 0;
   let totalClientsCount = 0;
   let allClientsList = [];
   const uniqueProfiles = {};
+  let totalCurrentToday = 0;
 
-  Object.keys(statuses).forEach(url => {
-    const s = statuses[url];
-    if (s && s.online) {
-      totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
-      
-      const runningClients = s.clients || [];
-      allClientsList = [
-        ...allClientsList,
-        ...runningClients.map(c => ({
-          ...c,
-          instanceUrl: url,
-          instanceName: s.instanceName
-        }))
-      ];
-      
-      totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
+  if (onlineCount > 0) {
+    runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
+    Object.keys(statuses).forEach(url => {
+      const s = statuses[url];
+      if (s && s.online) {
+        totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
+        
+        const runningClients = s.clients || [];
+        allClientsList = [
+          ...allClientsList,
+          ...runningClients.map(c => ({
+            ...c,
+            instanceUrl: url,
+            instanceName: s.instanceName
+          }))
+        ];
+        
+        totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
 
-      (s.profiles || []).forEach(p => {
-        if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
-          uniqueProfiles[p.name] = p;
-        }
-      });
+        (s.profiles || []).forEach(p => {
+          if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
+            uniqueProfiles[p.name] = p;
+          }
+        });
+      }
+    });
+    totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+
+    // Update localStorage cache with overall global metrics
+    const newMetrics = {
+      totalTodayRun,
+      totalCurrentToday,
+      totalClientsCount,
+      runningBackends,
+      uniqueProfilesCount: Object.keys(uniqueProfiles).length,
+      allClientsList
+    };
+    if (JSON.stringify(newMetrics) !== JSON.stringify(cachedMetrics)) {
+      localStorage.setItem('kickbacks_cached_metrics', JSON.stringify(newMetrics));
+      setCachedMetrics(newMetrics);
     }
-  });
+  } else {
+    // When offline, fallback to the overall global cached metrics
+    runningBackends = cachedMetrics.runningBackends;
+    totalTodayRun = cachedMetrics.totalTodayRun;
+    totalClientsCount = cachedMetrics.totalClientsCount;
+    totalCurrentToday = cachedMetrics.totalCurrentToday;
+    allClientsList = cachedMetrics.allClientsList || [];
+  }
 
-  const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
 
-  // Line Chart Data
-  const renderChartData = () => {
+  // MUI X Charts data
+  const buildRevenueChart = () => {
     const allTimestamps = new Set();
-    const datasets = [];
-    const colors = ['#0066cc', '#2997ff', '#10b981', '#333333']; // Apple theme colors
 
     instances.forEach((url) => {
       const history = revenueHistories[url] || [];
@@ -405,7 +429,7 @@ export default function App() {
 
     const labels = Array.from(allTimestamps).sort();
 
-    instances.forEach((url, index) => {
+    const series = instances.map((url) => {
       const history = revenueHistories[url] || [];
       const dataMap = {};
       history.forEach(pt => {
@@ -413,53 +437,20 @@ export default function App() {
       });
 
       const dataPoints = labels.map(lbl => dataMap[lbl] !== undefined ? dataMap[lbl] : null);
-      const color = colors[index % colors.length];
-      
-      datasets.push({
+      return {
+        id: url,
         label: statuses[url]?.instanceName || url.replace('https://', ''),
         data: dataPoints,
-        borderColor: color,
-        backgroundColor: color + '08',
-        borderWidth: 2,
-        pointRadius: 3,
-        tension: 0.1,
-        spanGaps: true
-      });
+        curve: 'linear',
+        connectNulls: true,
+        showMark: ({ index }) => index === dataPoints.length - 1,
+        valueFormatter: (value) => value == null ? 'No sample' : `$${Number(value).toFixed(4)}`
+      };
     });
 
-    return {
-      labels,
-      datasets
-    };
+    return { labels, series };
   };
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'top',
-        labels: {
-          color: '#1d1d1f',
-          font: { family: 'Inter', size: 12 }
-        }
-      },
-      tooltip: {
-        mode: 'index',
-        intersect: false,
-      }
-    },
-    scales: {
-      x: {
-        grid: { color: '#f0f0f0' },
-        ticks: { color: '#86868b', font: { family: 'Inter', size: 11 } }
-      },
-      y: {
-        grid: { color: '#f0f0f0' },
-        ticks: { color: '#86868b', font: { family: 'Inter', size: 11 } }
-      }
-    }
-  };
+  const revenueChart = buildRevenueChart();
 
   if (loading) {
     return (
@@ -651,7 +642,7 @@ export default function App() {
                 <Cpu size={18} />
                 <div>
                   <p className="metric-label">Profiles tracked</p>
-                  <p className="metric-value">{Object.keys(uniqueProfiles).length}</p>
+                  <p className="metric-value">{onlineCount > 0 ? Object.keys(uniqueProfiles).length : cachedMetrics.uniqueProfilesCount}</p>
                 </div>
               </div>
             </section>
@@ -816,7 +807,63 @@ export default function App() {
               </div>
             ) : (
               <div className="chart-frame">
-                <Line data={renderChartData()} options={chartOptions} />
+                <Suspense
+                  fallback={
+                    <div className="chart-placeholder inline">
+                      <div className="loading-ring small" aria-label="Loading chart renderer" />
+                      <span>Loading chart renderer...</span>
+                    </div>
+                  }
+                >
+                  <MuiLineChart
+                    height={410}
+                    margin={{ top: 52, right: 8, bottom: 38, left: 58 }}
+                    colors={['#0a72d8', '#2bb8d8', '#11a36a', '#7757d9', '#d98200']}
+                    series={revenueChart.series}
+                    xAxis={[{
+                      id: 'time',
+                      scaleType: 'point',
+                      data: revenueChart.labels,
+                      tickLabelStyle: {
+                        fill: '#687083',
+                        fontSize: 11,
+                        fontFamily: 'Inter, system-ui, sans-serif'
+                      }
+                    }]}
+                    yAxis={[{
+                      width: 52,
+                      valueFormatter: (value) => `$${Number(value).toFixed(2)}`,
+                      tickLabelStyle: {
+                        fill: '#687083',
+                        fontSize: 11,
+                        fontFamily: 'Inter, system-ui, sans-serif'
+                      }
+                    }]}
+                    grid={{ horizontal: true }}
+                    axisHighlight={{ x: 'line' }}
+                    slotProps={{
+                      legend: {
+                        direction: 'horizontal',
+                        position: { vertical: 'top', horizontal: 'middle' },
+                        padding: 0
+                      }
+                    }}
+                    sx={{
+                      width: '100%',
+                      '& .MuiChartsAxis-line': { stroke: '#dce4ee' },
+                      '& .MuiChartsAxis-tick': { stroke: '#dce4ee' },
+                      '& .MuiChartsGrid-line': { stroke: '#eef3f8' },
+                      '& .MuiChartsLegend-label': {
+                        color: '#3a3f4b',
+                        fontSize: 12,
+                        fontFamily: 'Inter, system-ui, sans-serif',
+                        fontWeight: 700
+                      },
+                      '& .MuiLineElement-root': { strokeWidth: 3 },
+                      '& .MuiMarkElement-root': { strokeWidth: 2 }
+                    }}
+                  />
+                </Suspense>
               </div>
             )}
           </div>
