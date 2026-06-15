@@ -11,7 +11,8 @@ const MuiLineChart = lazy(() =>
 
 const DEFAULT_INSTANCES = [
   'https://r.utksh.in',
-  'https://r1.utksh.in'
+  'https://r1.utksh.in',
+  'https://revenue.utksh.bar'
 ];
 
 const TABS = [
@@ -36,7 +37,14 @@ export default function App() {
 
   const [instances, setInstances] = useState(() => {
     const saved = localStorage.getItem('dashboard_instances');
-    return saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
+    const list = saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
+    const merged = [...list];
+    DEFAULT_INSTANCES.forEach(item => {
+      if (!merged.includes(item)) {
+        merged.push(item);
+      }
+    });
+    return merged;
   });
   const [newUrl, setNewUrl] = useState('');
 
