@@ -3,7 +3,15 @@ const express = require('express');
 const { fork } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { loadConfig, saveRevenueHistory, getRevenueHistory } = require('./db');
+const { 
+  loadConfig, 
+  saveRevenueHistory, 
+  getRevenueHistory,
+  getClientStats,
+  updateClientTick,
+  updateClientBilling,
+  distributeClientRevenue
+} = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -338,8 +346,8 @@ app.use((req, res, next) => {
 
 let simulatorProcess = null;
 let logs = [];
-let clients = {};
 let profiles = {};
+let billedClients = []; // In-memory queue to attribute actual revenue
 
 function appendLog(message) {
   const logLine = {
@@ -376,6 +384,8 @@ function startSimulator() {
     if (msg.type === 'earnings') {
       const { profileName, todayUsd, lifetimeUsd, todayMicros, lifetimeMicros, blocked } = msg;
       
+      const lastTodayUsd = profiles[profileName]?.currentTodayUsd;
+
       if (!profiles[profileName]) {
         profiles[profileName] = {
           name: profileName,
@@ -403,6 +413,29 @@ function startSimulator() {
         prof.earnedLifetimeRun = Math.max(0, (lifetimeMicros - prof.initialLifetimeMicros) / 1000000);
       }
 
+      // Attribute actual revenue diff to clients
+      if (lastTodayUsd !== undefined && todayUsd > lastTodayUsd) {
+        const diff = todayUsd - lastTodayUsd;
+        if (billedClients.length > 0) {
+          distributeClientRevenue(billedClients, diff).catch(err => {
+            console.error("SYSTEM: Error distributing revenue to billed clients:", err.message);
+          });
+          billedClients = [];
+        } else {
+          // Fallback: distribute to all active clients of this instance in PostgreSQL
+          getClientStats().then(dbClients => {
+            const activeNames = dbClients
+              .filter(c => c.instance_name === (process.env.INSTANCE_NAME || 'default') && c.last_status !== 'Stopped')
+              .map(c => c.client_name);
+            if (activeNames.length > 0) {
+              distributeClientRevenue(activeNames, diff).catch(err => {
+                console.error("SYSTEM: Error distributing revenue to fallback active clients:", err.message);
+              });
+            }
+          });
+        }
+      }
+
       const nowTime = Date.now();
       const prof = profiles[profileName];
       if (prof && (!prof.lastLoggedDbTime || (nowTime - prof.lastLoggedDbTime >= 15 * 60 * 1000))) {
@@ -413,43 +446,29 @@ function startSimulator() {
       }
     } else if (msg.type === 'client_ad') {
       const { clientName, clientId, adId, adTitle } = msg;
-      if (!clients[clientName]) {
-        clients[clientName] = {
-          name: clientName,
-          clientId,
-          adTitle,
-          adId,
-          ticks: 0,
-          lastTickTime: null,
-          lastStatus: 'Initial'
-        };
-      } else {
-        clients[clientName].adTitle = adTitle;
-        clients[clientName].adId = adId;
-      }
+      updateClientTick(clientName, process.env.INSTANCE_NAME || 'default', clientId, adId, adTitle, 'Initial', null).catch(err => {
+        console.error("SYSTEM: Error updating client ad in DB:", err.message);
+      });
     } else if (msg.type === 'client_tick') {
       const { clientName, clientId, adId, adTitle, status } = msg;
-      if (!clients[clientName]) {
-        clients[clientName] = {
-          name: clientName,
-          clientId,
-          adTitle,
-          adId,
-          ticks: 1,
-          lastTickTime: new Date().toLocaleTimeString(),
-          lastStatus: status === 200 ? 'Success' : `Error (${status})`
-        };
-      } else {
-        clients[clientName].ticks++;
-        clients[clientName].lastTickTime = new Date().toLocaleTimeString();
-        clients[clientName].lastStatus = status === 200 ? 'Success' : `Error (${status})`;
-        if (adTitle) clients[clientName].adTitle = adTitle;
-        if (adId) clients[clientName].adId = adId;
-      }
+      const lastTickTime = new Date().toLocaleTimeString();
+      const statusStr = status === 200 ? 'Success' : `Error (${status})`;
+      updateClientTick(clientName, process.env.INSTANCE_NAME || 'default', clientId, adId, adTitle, statusStr, lastTickTime).catch(err => {
+        console.error("SYSTEM: Error updating client tick in DB:", err.message);
+      });
     } else if (msg.type === 'client_billing') {
       const { clientName, status } = msg;
-      if (clients[clientName]) {
-        clients[clientName].lastStatus = (status === 200 || status === 204) ? 'Billed (Success)' : `Billing Error (${status})`;
+      const isSuccess = (status === 200 || status === 204);
+      const statusStr = isSuccess ? 'Billed (Success)' : `Billing Error (${status})`;
+      
+      updateClientBilling(clientName, statusStr, isSuccess).catch(err => {
+        console.error("SYSTEM: Error updating client billing in DB:", err.message);
+      });
+
+      if (isSuccess) {
+        if (!billedClients.includes(clientName)) {
+          billedClients.push(clientName);
+        }
       }
     }
   });
@@ -457,8 +476,14 @@ function startSimulator() {
   simulatorProcess.on('exit', (code, signal) => {
     appendLog(`SYSTEM: Simulator process exited (code: ${code}, signal: ${signal})`);
     simulatorProcess = null;
-    Object.keys(clients).forEach(k => {
-      clients[k].lastStatus = 'Stopped';
+    
+    // Reset client statuses in DB
+    const { runPgQuery } = require('./db');
+    runPgQuery(
+      "UPDATE client_stats SET last_status = 'Stopped', updated_at = NOW() WHERE instance_name = $1;",
+      [process.env.INSTANCE_NAME || 'default']
+    ).catch(err => {
+      console.error("SYSTEM: Error updating exit statuses in DB:", err.message);
     });
   });
 
@@ -474,6 +499,17 @@ function stopSimulator() {
 
 // Auto-start simulator on boot
 startSimulator();
+
+// Reset this instance's clients in DB to Stopped on boot in case of crash
+loadConfig().then(() => {
+  const { runPgQuery } = require('./db');
+  runPgQuery(
+    "UPDATE client_stats SET last_status = 'Stopped', updated_at = NOW() WHERE instance_name = $1;",
+    [process.env.INSTANCE_NAME || 'default']
+  ).catch(err => {
+    // Ignore error
+  });
+});
 
 // Health/Status API Check at root
 app.get('/', (req, res) => {
@@ -498,7 +534,6 @@ app.get('/api-docs', (req, res) => {
     html { box-sizing: border-box; overflow: -webkit-scrollbars; }
     *, *:before, *:after { box-sizing: inherit; }
     body { margin: 0; background: #0f172a; }
-    /* Beautiful Dark Mode overlay style */
     .swagger-ui {
       filter: invert(90%) hue-rotate(180deg);
       background-color: #fafafa;
@@ -564,6 +599,13 @@ app.get('/api/status', checkAuth, async (req, res) => {
     // Ignore error
   }
 
+  let dbClients = [];
+  try {
+    dbClients = await getClientStats();
+  } catch (err) {
+    console.error("SYSTEM: Failed to load client stats from DB:", err.message);
+  }
+
   // Aggregate totals
   let totalEarnedTodayRun = 0;
   let totalEarnedLifetimeRun = 0;
@@ -582,7 +624,7 @@ app.get('/api/status', checkAuth, async (req, res) => {
     instanceName: process.env.INSTANCE_NAME || 'default',
     configProfiles,
     profiles: Object.values(profiles),
-    clients: Object.values(clients),
+    clients: dbClients, // Serve client statistics directly from PostgreSQL
     totals: {
       earnedTodayRun: totalEarnedTodayRun.toFixed(6),
       earnedLifetimeRun: totalEarnedLifetimeRun.toFixed(6),

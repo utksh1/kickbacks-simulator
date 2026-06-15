@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal, 
   Settings, LineChart, RefreshCw, LogOut, Plus, Trash2, 
-  Play, Square, AlertCircle, Ban 
+  Play, Square, AlertCircle, Ban, Server, Compass
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -12,12 +12,10 @@ import {
   LineElement,
   Title,
   Tooltip,
-  Legend,
-  TimeScale
+  Legend
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 
-// Register Chart.js components
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -34,40 +32,32 @@ const DEFAULT_INSTANCES = [
 ];
 
 export default function App() {
-  // Auth state
   const [password, setPassword] = useState(localStorage.getItem('dashboard_password') || '');
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authChecking, setAuthChecking] = useState(false);
 
-  // Instances list state
   const [instances, setInstances] = useState(() => {
     const saved = localStorage.getItem('dashboard_instances');
     return saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
   });
   const [newUrl, setNewUrl] = useState('');
 
-  // Dashboard state
   const [activeTab, setActiveTab] = useState('dashboard');
   const [statuses, setStatuses] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Selected instance for logs and individual actions
   const [selectedLogInstance, setSelectedLogInstance] = useState(instances[0] || '');
-
-  // Config editor state
   const [configJson, setConfigJson] = useState('[]');
   const [configSaving, setConfigSaving] = useState(false);
 
-  // Historical Revenue state
   const [revenueHistories, setRevenueHistories] = useState({});
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Auto-scroll ref for console logs
   const logsEndRef = useRef(null);
 
-  // Initialize Auth Check
+  // Initial Auth Check
   useEffect(() => {
     if (password) {
       verifyPassword(password);
@@ -76,7 +66,7 @@ export default function App() {
     }
   }, []);
 
-  // Save instances to local storage
+  // Save instances list
   useEffect(() => {
     localStorage.setItem('dashboard_instances', JSON.stringify(instances));
     if (instances.length > 0 && !selectedLogInstance) {
@@ -84,13 +74,12 @@ export default function App() {
     }
   }, [instances]);
 
-  // Main polling effect
+  // Status Polling Loop
   useEffect(() => {
     if (!isAuthorized) return;
 
     const fetchAllStatuses = async () => {
       const results = {};
-      
       await Promise.all(
         instances.map(async (url) => {
           try {
@@ -113,14 +102,13 @@ export default function App() {
                 configProfiles: data.configProfiles || []
               };
             } else {
-              results[url] = { online: false, error: `HTTP Status ${res.status}` };
+              results[url] = { online: false, error: `HTTP ${res.status}` };
             }
           } catch (err) {
             results[url] = { online: false, error: err.message };
           }
         })
       );
-
       setStatuses(results);
       setLoading(false);
     };
@@ -130,7 +118,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAuthorized, instances, password, refreshTrigger]);
 
-  // Fetch Revenue History effect when tab is analytics
+  // Fetch histories when Analytics tab is selected
   useEffect(() => {
     if (!isAuthorized || activeTab !== 'analytics') return;
 
@@ -159,10 +147,9 @@ export default function App() {
     fetchRevenueHistories();
   }, [isAuthorized, activeTab, instances, password, refreshTrigger]);
 
-  // Load config JSON into editor when config tab opens
+  // Load config JSON into configurator
   useEffect(() => {
     if (activeTab === 'config') {
-      // Find the first online instance to pre-populate configuration
       const onlineInstance = Object.keys(statuses).find(url => statuses[url]?.online);
       if (onlineInstance && statuses[onlineInstance]?.configProfiles) {
         setConfigJson(JSON.stringify(statuses[onlineInstance].configProfiles, null, 2));
@@ -170,19 +157,16 @@ export default function App() {
     }
   }, [activeTab, statuses]);
 
-  // Auto-scroll logs
+  // Auto-scroll log console
   useEffect(() => {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [statuses, selectedLogInstance]);
 
-  // Password verification helper
   const verifyPassword = async (pass) => {
     setAuthChecking(true);
     setAuthError('');
-    
-    // We try to verify by making a status call to the first instance
     const testUrl = instances[0] || 'https://r.utksh.in';
     try {
       const res = await fetch(`${testUrl}/api/login`, {
@@ -195,12 +179,11 @@ export default function App() {
         setPassword(pass);
         setIsAuthorized(true);
       } else {
-        setAuthError('Invalid dashboard password.');
+        setAuthError('Invalid master password.');
       }
     } catch (err) {
-      // Fallback: If network is offline or CORS issue but we have a password, let user in or log warning
       console.warn("Auth check failed:", err.message);
-      // Let's assume password is OK for client logic and let the status calls fail with 401 if actually wrong
+      // Fallback in case of CORS / offline
       localStorage.setItem('dashboard_password', pass);
       setPassword(pass);
       setIsAuthorized(true);
@@ -222,7 +205,6 @@ export default function App() {
     setIsAuthorized(false);
   };
 
-  // Add backend URL helper
   const handleAddInstance = (e) => {
     e.preventDefault();
     if (!newUrl) return;
@@ -230,7 +212,6 @@ export default function App() {
     if (!formatted.startsWith('http://') && !formatted.startsWith('https://')) {
       formatted = 'https://' + formatted;
     }
-    // Remove trailing slash
     if (formatted.endsWith('/')) {
       formatted = formatted.slice(0, -1);
     }
@@ -240,14 +221,12 @@ export default function App() {
     setNewUrl('');
   };
 
-  // Remove backend URL helper
   const handleRemoveInstance = (url) => {
     if (window.confirm(`Are you sure you want to remove instance: ${url}?`)) {
       setInstances(instances.filter(u => u !== url));
     }
   };
 
-  // Control APIs helpers
   const startAllSimulators = async () => {
     await Promise.all(
       instances.map(async (url) => {
@@ -288,7 +267,7 @@ export default function App() {
       });
       setRefreshTrigger(prev => prev + 1);
     } catch (err) {
-      alert(`Failed to start simulator on ${url}: ${err.message}`);
+      alert(`Failed to start simulator: ${err.message}`);
     }
   };
 
@@ -300,7 +279,7 @@ export default function App() {
       });
       setRefreshTrigger(prev => prev + 1);
     } catch (err) {
-      alert(`Failed to stop simulator on ${url}: ${err.message}`);
+      alert(`Failed to stop simulator: ${err.message}`);
     }
   };
 
@@ -312,7 +291,7 @@ export default function App() {
       });
       setRefreshTrigger(prev => prev + 1);
     } catch (err) {
-      alert(`Failed to clear logs for ${url}: ${err.message}`);
+      alert(`Failed to clear logs: ${err.message}`);
     }
   };
 
@@ -321,11 +300,9 @@ export default function App() {
     setConfigSaving(true);
     try {
       const parsed = JSON.parse(configJson);
-      
-      // Update config on ALL online instances
       const onlineUrls = instances.filter(url => statuses[url]?.online);
       if (onlineUrls.length === 0) {
-        throw new Error("No backend instances are currently online to save configuration.");
+        throw new Error("No backend instances are online to save config.");
       }
 
       await Promise.all(
@@ -344,7 +321,7 @@ export default function App() {
         })
       );
 
-      alert("Configuration updated successfully on all online instances. Simulators are restarting.");
+      alert("Configuration updated successfully. Simulators are restarting.");
       setRefreshTrigger(prev => prev + 1);
     } catch (err) {
       alert(`Save failed: ${err.message}`);
@@ -353,22 +330,19 @@ export default function App() {
     }
   };
 
-  // Helper: Format log message lines with colors
+  // Log level message styling
   const getLogClass = (message) => {
-    if (message.includes('SYSTEM:')) return 'log-message system';
-    if (message.includes('ERROR:')) return 'log-message error';
-    if (message.includes('Auth:')) return 'log-message auth';
-    if (message.includes('Tick:')) return 'log-message success';
-    if (message.includes('Billing') || message.includes('Billed')) return 'log-message billing';
-    return 'log-message';
+    if (message.includes('SYSTEM:')) return 'console-msg system';
+    if (message.includes('ERROR:')) return 'console-msg error';
+    if (message.includes('Auth:')) return 'console-msg auth';
+    if (message.includes('Tick:')) return 'console-msg success';
+    if (message.includes('Billing') || message.includes('Billed')) return 'console-msg billing';
+    return 'console-msg';
   };
 
-  // Calculations for dashboard
+  // Aggregate Metrics Calculations
   const onlineCount = Object.values(statuses).filter(s => s.online).length;
-  
-  // Aggregate run earnings and client details
   let totalTodayRun = 0;
-  let totalLifetimeRun = 0;
   let totalClientsCount = 0;
   let allClientsList = [];
   const uniqueProfiles = {};
@@ -377,9 +351,7 @@ export default function App() {
     const s = statuses[url];
     if (s && s.online) {
       totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
-      totalLifetimeRun += parseFloat(s.totals?.earnedLifetimeRun || 0);
       
-      // Clients
       const runningClients = s.clients || [];
       allClientsList = [
         ...allClientsList,
@@ -392,7 +364,6 @@ export default function App() {
       
       totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
 
-      // Unique profiles configuration
       (s.profiles || []).forEach(p => {
         if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
           uniqueProfiles[p.name] = p;
@@ -402,18 +373,17 @@ export default function App() {
   });
 
   const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
-  const totalCurrentLifetime = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentLifetimeUsd, 0);
 
-  // Build Analytics Chart Data
+  // Line Chart Data
   const renderChartData = () => {
     const allTimestamps = new Set();
     const datasets = [];
-    const colors = ['#a78bfa', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
+    const colors = ['#0066cc', '#2997ff', '#10b981', '#333333']; // Apple theme colors
 
-    instances.forEach((url, index) => {
+    instances.forEach((url) => {
       const history = revenueHistories[url] || [];
       history.forEach(pt => {
-        allTimestamps.add(new Date(pt.timestamp).toLocaleTimeString());
+        allTimestamps.add(new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       });
     });
 
@@ -423,19 +393,20 @@ export default function App() {
       const history = revenueHistories[url] || [];
       const dataMap = {};
       history.forEach(pt => {
-        dataMap[new Date(pt.timestamp).toLocaleTimeString()] = parseFloat(pt.today_usd);
+        dataMap[new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })] = parseFloat(pt.today_usd);
       });
 
-      const dataPoints = labels.map(lbl => dataMap[lbl] || null);
-
+      const dataPoints = labels.map(lbl => dataMap[lbl] !== undefined ? dataMap[lbl] : null);
       const color = colors[index % colors.length];
+      
       datasets.push({
-        label: statuses[url]?.instanceName || url,
+        label: statuses[url]?.instanceName || url.replace('https://', ''),
         data: dataPoints,
         borderColor: color,
-        backgroundColor: color + '22',
+        backgroundColor: color + '08',
         borderWidth: 2,
-        tension: 0.3,
+        pointRadius: 3,
+        tension: 0.1,
         spanGaps: true
       });
     });
@@ -453,8 +424,8 @@ export default function App() {
       legend: {
         position: 'top',
         labels: {
-          color: '#e5e7eb',
-          font: { family: 'Outfit' }
+          color: '#1d1d1f',
+          font: { family: 'Inter', size: 12 }
         }
       },
       tooltip: {
@@ -464,12 +435,12 @@ export default function App() {
     },
     scales: {
       x: {
-        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-        ticks: { color: '#9ca3af', font: { family: 'Outfit' } }
+        grid: { color: '#f0f0f0' },
+        ticks: { color: '#86868b', font: { family: 'Inter', size: 11 } }
       },
       y: {
-        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-        ticks: { color: '#9ca3af', font: { family: 'Outfit' } }
+        grid: { color: '#f0f0f0' },
+        ticks: { color: '#86868b', font: { family: 'Inter', size: 11 } }
       }
     }
   };
@@ -479,10 +450,10 @@ export default function App() {
       <div className="auth-overlay">
         <div className="auth-card">
           <div className="auth-header">
-            <h1>LOADING...</h1>
-            <p>Initializing connection to Render API services</p>
+            <h1></h1>
+            <p style={{ marginTop: '10px' }}>Loading Kickbacks Dashboard...</p>
           </div>
-          <div style={{ display: 'inline-block', width: '30px', height: '30px', border: '3px solid #7c3aed', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          <div style={{ display: 'inline-block', width: '24px', height: '24px', border: '2px solid #0066cc', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></div>
           <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
@@ -494,22 +465,22 @@ export default function App() {
       <div className="auth-overlay">
         <form className="auth-card" onSubmit={handleLoginSubmit}>
           <div className="auth-header">
-            <h1>KICKBACKS SIMULATOR</h1>
-            <p>Enter the master security password</p>
+            <h1> KICKBACKS</h1>
+            <p>Enter your master security password</p>
           </div>
           <div className="form-group">
-            <label htmlFor="authPassword">Dashboard Password</label>
+            <label htmlFor="authPassword">Password</label>
             <input 
               id="authPassword"
               name="authPassword"
               type="password" 
               className="form-input" 
-              placeholder="••••••••"
+              placeholder="Required"
               required 
             />
           </div>
           <button type="submit" className="btn-primary" disabled={authChecking}>
-            {authChecking ? 'Verifying...' : 'Unlock Dashboard'}
+            {authChecking ? 'Verifying...' : 'Sign In'}
           </button>
           {authError && <div className="auth-error">{authError}</div>}
         </form>
@@ -518,259 +489,288 @@ export default function App() {
   }
 
   return (
-    <div className="app-container">
-      {/* HEADER SECTION */}
-      <header className="app-header">
-        <div className="app-title">
-          <h1>KICKBACKS DASHBOARD</h1>
-          <p>Unified headless simulator interface • {onlineCount}/{instances.length} Backends Online</p>
-        </div>
-        
-        <div className="nav-tabs">
+    <div>
+      {/* 1. Global Navigation ( style thin black bar) */}
+      <nav className="global-nav">
+        <div className="global-nav-content">
+          <div className="global-nav-logo" onClick={() => setActiveTab('dashboard')}>
+            <span style={{ fontSize: '16px', fontWeight: '600', letterSpacing: '-0.02em', marginRight: '6px' }}></span>
+            <span style={{ fontSize: '13px', fontWeight: '600', letterSpacing: '-0.02em' }}>KICKBACKS</span>
+          </div>
+
+          <div className="global-nav-links">
+            <button 
+              className={`global-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setActiveTab('dashboard')}
+            >
+              Dashboard
+            </button>
+            <button 
+              className={`global-nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
+              onClick={() => setActiveTab('analytics')}
+            >
+              Analytics
+            </button>
+            <button 
+              className={`global-nav-item ${activeTab === 'config' ? 'active' : ''}`}
+              onClick={() => setActiveTab('config')}
+            >
+              Configuration
+            </button>
+            <button 
+              className={`global-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
+              onClick={() => setActiveTab('logs')}
+            >
+              Terminal Logs
+            </button>
+          </div>
+
           <button 
-            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
-          >
-            <Cpu size={16} /> Dashboard
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'analytics' ? 'active' : ''}`}
-            onClick={() => setActiveTab('analytics')}
-          >
-            <LineChart size={16} /> Analytics
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'config' ? 'active' : ''}`}
-            onClick={() => setActiveTab('config')}
-          >
-            <Settings size={16} /> Config
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
-            onClick={() => setActiveTab('logs')}
-          >
-            <Terminal size={16} /> Console Logs
-          </button>
-          <button 
-            className="tab-btn" 
-            style={{ color: 'var(--color-danger)' }}
+            className="global-nav-logout"
             onClick={handleLogout}
+            title="Sign Out"
           >
-            <LogOut size={16} />
+            <LogOut size={14} />
           </button>
         </div>
-      </header>
+      </nav>
 
-      {/* METRICS CARDS */}
-      <section className="metrics-grid">
-        <div className="metric-card success-card">
-          <div className="metric-header">
-            <span className="metric-title">TOTAL REVENUE (RUN)</span>
-            <CircleDollarSign size={20} className="metric-icon" style={{ color: 'var(--color-success)' }} />
-          </div>
-          <p className="metric-value" style={{ color: 'var(--color-success)' }}>${totalTodayRun.toFixed(4)}</p>
-          <p className="metric-subvalue">Today's active run earnings across instances</p>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-header">
-            <span className="metric-title">TOTAL REVENUE (LIFETIME)</span>
-            <CircleDollarSign size={20} className="metric-icon" />
-          </div>
-          <p className="metric-value">${totalCurrentToday.toFixed(2)}</p>
-          <p className="metric-subvalue">Real Postgres DB total: ${totalCurrentLifetime.toFixed(2)} lifetime</p>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-header">
-            <span className="metric-title">ACTIVE VIRTUAL CLIENTS</span>
-            <Activity size={20} className="metric-icon" style={{ color: 'var(--color-secondary)' }} />
-          </div>
-          <p className="metric-value" style={{ color: 'var(--color-secondary)' }}>{totalClientsCount}</p>
-          <p className="metric-subvalue">Total clients running: {allClientsList.length}</p>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-header">
-            <span className="metric-title">INSTANCES STATUS</span>
-            <RefreshCw 
-              size={18} 
-              className="metric-icon" 
-              style={{ cursor: 'pointer' }}
-              onClick={() => setRefreshTrigger(p => p + 1)}
-            />
-          </div>
-          <p className="metric-value">{onlineCount}/{instances.length}</p>
-          <p className="metric-subvalue">Click refresh icon to manually poll all endpoints</p>
-        </div>
-      </section>
-
-      {/* INSTANCE CHIPS AREA */}
-      <section className="instance-manager-bar">
-        <div className="instances-list">
-          {instances.map(url => {
-            const s = statuses[url];
-            return (
-              <div key={url} className={`instance-chip ${selectedLogInstance === url ? 'active-instance' : ''}`}>
-                <span className={s?.online ? 'pulsing-active' : 'pulsing-inactive'}></span>
-                <span>{s?.instanceName || url.replace('https://', '')}</span>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  {s?.online ? (s.running ? 'Running' : 'Stopped') : 'Offline'}
-                </span>
-                
-                {s?.online && !s.running && (
-                  <button 
-                    onClick={() => startSingleSimulator(url)}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--color-success)', cursor: 'pointer', padding: 2 }}
-                    title="Start Simulator"
-                  >
-                    <Play size={12} />
-                  </button>
-                )}
-                {s?.online && s.running && (
-                  <button 
-                    onClick={() => stopSingleSimulator(url)}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--color-danger)', cursor: 'pointer', padding: 2 }}
-                    title="Stop Simulator"
-                  >
-                    <Square size={10} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        
-        <div className="dashboard-controls">
-          <button className="btn-control start-btn" onClick={startAllSimulators}>
-            <Play size={14} /> Start All
-          </button>
-          <button className="btn-control stop-btn" onClick={stopAllSimulators}>
-            <Square size={12} /> Stop All
-          </button>
-        </div>
-      </section>
-
-      {/* TAB CONTENT AREAS */}
-      <main className="tab-content">
-        
-        {/* TAB 1: DASHBOARD CLIENTS TABLE */}
-        {activeTab === 'dashboard' && (
-          <div className="dashboard-table-container">
-            <div className="table-header-row">
-              <h2>Unified Virtual Clients</h2>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                Showing {allClientsList.length} clients from {instances.length} backends
-              </span>
+      {/* 2. Sub-Nav Frosted (category navigation bar) */}
+      <nav className="sub-nav-frosted">
+        <div className="sub-nav-content">
+          <h2 className="sub-nav-title">
+            {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+          </h2>
+          
+          <div className="sub-nav-right">
+            <div className="sub-nav-status">
+              <span className="status-dot-active"></span>
+              <span>{onlineCount} of {instances.length} Backends Online</span>
             </div>
-            
-            {allClientsList.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-                <AlertCircle size={32} style={{ marginBottom: 12, color: 'var(--text-muted)' }} />
-                <p>No virtual clients connected. Please verify that the simulator is running on the backend instances.</p>
-              </div>
-            ) : (
-              <table className="client-table">
-                <thead>
-                  <tr>
-                    <th>Backend</th>
-                    <th>Client Identifier</th>
-                    <th>Active Ad Title</th>
-                    <th>Ticks Sent</th>
-                    <th>Last Status</th>
-                    <th>Last Active</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allClientsList.map((client, i) => {
-                    const isBilled = client.lastStatus?.includes('Billed');
-                    const isSuccess = client.lastStatus?.includes('Success');
-                    const isStopped = client.lastStatus?.includes('Stopped');
-                    
-                    let badgeClass = 'initial';
-                    if (isBilled) badgeClass = 'billing-success';
-                    else if (isSuccess) badgeClass = 'success';
-                    else if (isStopped) badgeClass = 'stopped';
 
-                    return (
-                      <tr key={i}>
-                        <td>
-                          <span className="instance-badge">{client.instanceName}</span>
-                        </td>
-                        <td style={{ fontWeight: '500' }}>{client.name}</td>
-                        <td style={{ color: client.adTitle ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                          {client.adTitle || 'None fetched'}
-                        </td>
-                        <td style={{ fontWeight: '600' }}>{client.ticks || 0}</td>
-                        <td>
-                          <span className={`status-badge ${badgeClass}`}>
-                            {client.lastStatus || 'Initial'}
-                          </span>
-                        </td>
-                        <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                          {client.lastTickTime || 'Never'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            {activeTab === 'dashboard' && (
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button className="btn-primary" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={startAllSimulators}>
+                  Start All
+                </button>
+                <button className="btn-secondary-pill danger" style={{ padding: '6px 14px', fontSize: '13px' }} onClick={stopAllSimulators}>
+                  Stop All
+                </button>
+              </div>
             )}
+
+            <button 
+              className="btn-secondary-pill" 
+              style={{ padding: '6px 10px' }}
+              onClick={() => setRefreshTrigger(p => p + 1)}
+              title="Refresh Stats"
+            >
+              <RefreshCw size={12} />
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content Area */}
+      <div className="app-container content-wrapper">
+        
+        {/* TAB 1: DASHBOARD VIEW */}
+        {activeTab === 'dashboard' && (
+          <div>
+            {/* Parchment Hero Tile */}
+            <section className="hero-tile-parchment">
+              <h2>{totalClientsCount} Active Simulators</h2>
+              <p className="tagline">headlessly spinning client metrics and logging revenue streams in PostgreSQL.</p>
+              
+              <div className="hero-metrics-row">
+                <div className="hero-metric-item">
+                  <p className="hero-metric-label">RUN REVENUE</p>
+                  <p className="hero-metric-val green">${totalTodayRun.toFixed(4)}</p>
+                </div>
+                <div className="hero-metric-item">
+                  <p className="hero-metric-label">REAL ACCOUNT TOTAL</p>
+                  <p className="hero-metric-val">${totalCurrentToday.toFixed(2)}</p>
+                </div>
+                <div className="hero-metric-item">
+                  <p className="hero-metric-label">TOTAL SPANNING</p>
+                  <p className="hero-metric-val blue">{allClientsList.length}</p>
+                </div>
+                <div className="hero-metric-item">
+                  <p className="hero-metric-label">ACTIVE BACKENDS</p>
+                  <p className="hero-metric-val">{onlineCount}/{instances.length}</p>
+                </div>
+              </div>
+            </section>
+
+            {/* Backends Card Grid */}
+            <section className="store-cards-grid">
+              {instances.map(url => {
+                const s = statuses[url];
+                return (
+                  <div key={url} className="store-utility-card">
+                    <div>
+                      <div className="card-top">
+                        <div>
+                          <h3 className="card-title">{s?.instanceName || url.replace('https://', '')}</h3>
+                          <p className="card-subtitle">{url}</p>
+                        </div>
+                        <span className={s?.online ? 'status-dot-active' : 'status-dot-inactive'}></span>
+                      </div>
+                      
+                      <div className="card-middle">
+                        <div className="card-metric-block">
+                          <p className="label">Status</p>
+                          <p className="val" style={{ color: s?.online ? (s.running ? 'var(--color-success)' : 'var(--colors-ink)') : 'var(--color-danger)' }}>
+                            {s?.online ? (s.running ? 'Running' : 'Stopped') : 'Offline'}
+                          </p>
+                        </div>
+                        
+                        {s?.online && (
+                          <div className="card-metric-block">
+                            <p className="label">Clients Count</p>
+                            <p className="val">
+                              {s.clients?.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length || 0} active
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card-actions">
+                      {s?.online && !s.running && (
+                        <button className="btn-dark-utility" onClick={() => startSingleSimulator(url)}>
+                          <Play size={12} /> Start
+                        </button>
+                      )}
+                      {s?.online && s.running && (
+                        <button className="btn-dark-utility hollow" onClick={() => stopSingleSimulator(url)}>
+                          <Square size={10} /> Stop
+                        </button>
+                      )}
+                      {!s?.online && (
+                        <button className="btn-dark-utility hollow" style={{ opacity: 0.5, cursor: 'not-allowed' }} disabled>
+                          Offline
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+
+            {/* High contrast Minimal Client List */}
+            <section className="section-card">
+              <h2>Connected Virtual Clients</h2>
+              
+              {allClientsList.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--colors-ink-muted-48)' }}>
+                  <AlertCircle size={28} style={{ marginBottom: 12 }} />
+                  <p>No active simulator clients. Launch simulators to fetch live metrics.</p>
+                </div>
+              ) : (
+                <table className="client-table">
+                  <thead>
+                    <tr>
+                      <th>Instance</th>
+                      <th>Client Name</th>
+                      <th>Ad Render Title</th>
+                      <th>Ticks</th>
+                      <th>Bills</th>
+                      <th>Revenue</th>
+                      <th>Last Status</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allClientsList.map((client, idx) => {
+                      const isBilled = client.lastStatus?.includes('Billed');
+                      const isSuccess = client.lastStatus?.includes('Success');
+                      const isStopped = client.lastStatus?.includes('Stopped');
+                      
+                      let chipClass = 'neutral';
+                      if (isBilled) chipClass = 'blue';
+                      else if (isSuccess) chipClass = 'green';
+                      else if (isStopped) chipClass = 'red';
+
+                      return (
+                        <tr key={idx}>
+                          <td>
+                            <span style={{ fontWeight: '600' }}>{client.instanceName}</span>
+                          </td>
+                          <td>{client.name}</td>
+                          <td>{client.adTitle || <span style={{ color: 'var(--colors-ink-muted-48)' }}>None</span>}</td>
+                          <td style={{ fontWeight: '600' }}>{client.ticks || 0}</td>
+                          <td style={{ fontWeight: '600' }}>{client.billing_count || 0}</td>
+                          <td style={{ fontWeight: '600', color: 'var(--color-success)' }}>
+                            ${parseFloat(client.revenue_usd || 0).toFixed(6)}
+                          </td>
+                          <td>
+                            <span className={`chip ${chipClass}`}>
+                              {client.lastStatus || 'Initial'}
+                            </span>
+                          </td>
+                          <td style={{ color: 'var(--colors-ink-muted-48)' }}>{client.lastTickTime || 'Never'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </section>
           </div>
         )}
 
         {/* TAB 2: ANALYTICS */}
         {activeTab === 'analytics' && (
-          <div className="chart-card">
-            <div className="chart-header">
-              <h2>Historical Revenue Streams</h2>
-              <p>Compare client earnings history logged in PostgreSQL over the last 24 hours</p>
-            </div>
+          <div className="section-card">
+            <h2>Revenue Growth Snapshots</h2>
+            <p style={{ color: 'var(--colors-ink-muted-48)', fontSize: '14px', marginTop: '-16px', marginBottom: '32px' }}>
+              Real-time daily revenue tracking loaded dynamically from PostgreSQL.
+            </p>
             
             {historyLoading ? (
-              <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifySelf: 'center', color: 'var(--text-secondary)' }}>
+              <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--colors-ink-muted-48)' }}>
                 Loading graphs...
               </div>
             ) : Object.keys(revenueHistories).length === 0 ? (
-              <div style={{ height: '300px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                <Ban size={30} style={{ marginBottom: 10, color: 'var(--text-muted)' }} />
-                <p>No historical database data found.</p>
+              <div style={{ height: '300px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--colors-ink-muted-48)' }}>
+                <Ban size={28} style={{ marginBottom: 12 }} />
+                <p>No historical database data logged yet.</p>
               </div>
             ) : (
-              <div className="chart-container">
+              <div style={{ position: 'relative', height: '400px', width: '100%' }}>
                 <Line data={renderChartData()} options={chartOptions} />
               </div>
             )}
           </div>
         )}
 
-        {/* TAB 3: CONFIGURATION AND INSTANCES SETTINGS */}
+        {/* TAB 3: CONFIGURATION */}
         {activeTab === 'config' && (
-          <div className="settings-grid">
-            
-            {/* Instance Configuration */}
-            <div className="settings-card">
-              <h3>Backend Endpoints</h3>
-              <div className="backend-url-list">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
+            {/* Endpoints settings */}
+            <div className="section-card" style={{ height: 'fit-content' }}>
+              <h2>Render API Endpoints</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
                 {instances.map(url => (
-                  <div key={url} className="backend-url-item">
-                    <span>{url}</span>
+                  <div key={url} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: '#fafafc', border: '1px solid var(--hairline)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
                     <button 
-                      className="btn-remove-url"
+                      className="btn-dark-utility hollow" 
+                      style={{ padding: '6px', border: 'none', color: 'var(--color-danger)' }}
                       onClick={() => handleRemoveInstance(url)}
                       disabled={instances.length <= 1}
-                      title="Remove Backend Url"
                     >
                       <Trash2 size={14} />
                     </button>
                   </div>
                 ))}
               </div>
-              
+
               <form onSubmit={handleAddInstance}>
                 <div className="form-group">
-                  <label htmlFor="newBackendUrl">Add Render Backend URL</label>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <label htmlFor="newBackendUrl">New Endpoint</label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
                     <input 
                       id="newBackendUrl"
                       type="text" 
@@ -779,52 +779,52 @@ export default function App() {
                       value={newUrl}
                       onChange={e => setNewUrl(e.target.value)}
                     />
-                    <button type="submit" className="btn-primary" style={{ width: 'auto', padding: '12px 18px' }}>
-                      <Plus size={16} />
+                    <button type="submit" className="btn-primary" style={{ width: 'auto', padding: '10px 14px' }}>
+                      <Plus size={14} />
                     </button>
                   </div>
                 </div>
               </form>
             </div>
 
-            {/* Profile configuration (Postgres db sync) */}
-            <div className="settings-card">
-              <h3>Edit Simulator Config</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '-10px', marginBottom: '16px' }}>
-                Note: Both Render instances share this configuration in Postgres. Updating it will reload both simulators.
+            {/* Config Sync editor */}
+            <div className="section-card">
+              <h2>Simulator Configurations</h2>
+              <p style={{ color: 'var(--colors-ink-muted-48)', fontSize: '14px', marginTop: '-16px', marginBottom: '24px' }}>
+                Updates are stored in PostgreSQL and reloaded immediately on both active instances.
               </p>
-              
+
               <form onSubmit={saveConfiguration}>
                 <div className="form-group">
                   <textarea 
-                    className="code-editor-textarea"
+                    className="configurator-textarea"
                     value={configJson}
                     onChange={e => setConfigJson(e.target.value)}
                     required
                   />
                 </div>
+                
                 <button 
                   type="submit" 
                   className="btn-primary" 
+                  style={{ width: 'auto', display: 'flex', gap: '8px', alignItems: 'center', float: 'right' }}
                   disabled={configSaving}
-                  style={{ width: 'auto', display: 'flex', gap: 8, alignItems: 'center', float: 'right' }}
                 >
-                  <Settings size={16} />
-                  {configSaving ? 'Saving...' : 'Update & Restart Simulators'}
+                  <Settings size={14} />
+                  {configSaving ? 'Saving...' : 'Save Config & Restart'}
                 </button>
               </form>
             </div>
-
           </div>
         )}
 
-        {/* TAB 4: CONSOLE LOGS */}
+        {/* TAB 4: TERMINAL CONSOLE */}
         {activeTab === 'logs' && (
-          <div className="console-card">
-            <div className="console-header">
-              <h2>Instance Log Feeds</h2>
+          <div className="console-frame">
+            <div className="console-topbar">
+              <h3 className="console-title">Live Log Stream</h3>
               
-              <div className="console-controls">
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <select 
                   className="console-select"
                   value={selectedLogInstance}
@@ -837,22 +837,19 @@ export default function App() {
                   ))}
                 </select>
 
-                <button 
-                  className="btn-control"
-                  onClick={() => clearInstanceLogs(selectedLogInstance)}
-                >
-                  Clear Terminal
+                <button className="btn-dark-utility hollow" style={{ color: 'white', borderColor: '#3d3d40', padding: '4px 10px', fontSize: '12px' }} onClick={() => clearInstanceLogs(selectedLogInstance)}>
+                  Clear
                 </button>
               </div>
             </div>
 
-            <div className="console-body">
+            <div className="console-content">
               {statuses[selectedLogInstance]?.logs?.length === 0 ? (
-                <div className="empty-logs">No terminal logs recorded yet.</div>
+                <div style={{ color: '#6e6e73', textAlign: 'center', padding: '40px' }}>No logs recorded.</div>
               ) : (
                 (statuses[selectedLogInstance]?.logs || []).map((log, idx) => (
-                  <div key={idx} className="log-row">
-                    <span className="log-time">[{log.time}]</span>
+                  <div key={idx} className="console-row">
+                    <span className="console-time">[{log.time}]</span>
                     <span className={getLogClass(log.message)}>{log.message}</span>
                   </div>
                 ))
@@ -862,7 +859,7 @@ export default function App() {
           </div>
         )}
 
-      </main>
+      </div>
     </div>
   );
 }

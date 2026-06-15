@@ -42,6 +42,24 @@ async function loadConfig() {
       // Create tables if not exist
       await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
       await runPgQuery('CREATE TABLE IF NOT EXISTS revenue_history (timestamp TIMESTAMPTZ DEFAULT NOW(), profile_name VARCHAR(100), today_usd NUMERIC(10, 6), lifetime_usd NUMERIC(10, 6));');
+      
+      // Migrate/Create client_stats table
+      await runPgQuery(`
+        CREATE TABLE IF NOT EXISTS client_stats (
+          client_name VARCHAR(100) PRIMARY KEY,
+          instance_name VARCHAR(50),
+          client_id VARCHAR(50),
+          ad_title VARCHAR(255),
+          ad_id VARCHAR(100),
+          ticks INTEGER DEFAULT 0,
+          billing_count INTEGER DEFAULT 0,
+          revenue_usd NUMERIC(10, 6) DEFAULT 0,
+          last_status VARCHAR(50),
+          last_tick_time VARCHAR(50),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
       // Migration: Add instance_name column to revenue_history if it doesn't exist
       await runPgQuery('ALTER TABLE revenue_history ADD COLUMN IF NOT EXISTS instance_name VARCHAR(50) DEFAULT \'default\';');
       
@@ -108,6 +126,11 @@ async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
         [INSTANCE_NAME, profileName, todayUsd, lifetimeUsd]
       );
       console.log(`SYSTEM: Saved revenue snapshot for ${profileName} ($${todayUsd}) under instance ${INSTANCE_NAME}.`);
+      
+      // Auto-prune data older than 5 days
+      await runPgQuery("DELETE FROM revenue_history WHERE timestamp < NOW() - INTERVAL '5 days';");
+      await runPgQuery("DELETE FROM client_stats WHERE updated_at < NOW() - INTERVAL '5 days';");
+      console.log("SYSTEM: Pruned records older than 5 days from DB.");
     } catch (err) {
       console.error("SYSTEM: Render PostgreSQL saveRevenueHistory error:", err.message);
     }
@@ -133,4 +156,87 @@ async function getRevenueHistory(limitHours = 24) {
   return [];
 }
 
-module.exports = { loadConfig, saveConfig, saveRevenueHistory, getRevenueHistory };
+// Client Persistent Statistics helper functions
+async function getClientStats() {
+  if (process.env.DATABASE_URL) {
+    try {
+      const res = await runPgQuery('SELECT * FROM client_stats ORDER BY client_name ASC;');
+      return res.rows || [];
+    } catch (err) {
+      console.error("SYSTEM: getClientStats error:", err.message);
+      return [];
+    }
+  }
+  return [];
+}
+
+async function updateClientTick(clientName, instanceName, clientId, adId, adTitle, status, lastTickTime) {
+  if (process.env.DATABASE_URL) {
+    try {
+      const query = `
+        INSERT INTO client_stats (client_name, instance_name, client_id, ad_id, ad_title, ticks, last_status, last_tick_time, updated_at)
+        VALUES ($1, $2, $3, $4, $5, 1, $6, $7, NOW())
+        ON CONFLICT (client_name) DO UPDATE SET
+          instance_name = EXCLUDED.instance_name,
+          client_id = EXCLUDED.client_id,
+          ad_id = EXCLUDED.ad_id,
+          ad_title = EXCLUDED.ad_title,
+          ticks = client_stats.ticks + 1,
+          last_status = EXCLUDED.last_status,
+          last_tick_time = EXCLUDED.last_tick_time,
+          updated_at = NOW();
+      `;
+      await runPgQuery(query, [clientName, instanceName, clientId, adId, adTitle, status, lastTickTime]);
+    } catch (err) {
+      console.error("SYSTEM: updateClientTick DB error:", err.message);
+    }
+  }
+}
+
+async function updateClientBilling(clientName, status, isSuccess) {
+  if (process.env.DATABASE_URL) {
+    try {
+      const incrementBilling = isSuccess ? 1 : 0;
+      const query = `
+        INSERT INTO client_stats (client_name, billing_count, last_status, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (client_name) DO UPDATE SET
+          billing_count = client_stats.billing_count + $2,
+          last_status = EXCLUDED.last_status,
+          updated_at = NOW();
+      `;
+      await runPgQuery(query, [clientName, incrementBilling, status]);
+    } catch (err) {
+      console.error("SYSTEM: updateClientBilling DB error:", err.message);
+    }
+  }
+}
+
+async function distributeClientRevenue(clientNames, amountUsd) {
+  if (process.env.DATABASE_URL && clientNames.length > 0 && amountUsd > 0) {
+    try {
+      const share = amountUsd / clientNames.length;
+      const query = `
+        UPDATE client_stats 
+        SET revenue_usd = revenue_usd + $1, updated_at = NOW()
+        WHERE client_name = ANY($2);
+      `;
+      await runPgQuery(query, [share, clientNames]);
+      console.log(`SYSTEM: Distributed $${amountUsd} revenue to clients:`, clientNames);
+    } catch (err) {
+      console.error("SYSTEM: distributeClientRevenue DB error:", err.message);
+    }
+  }
+}
+
+module.exports = { 
+  loadConfig, 
+  saveConfig, 
+  saveRevenueHistory, 
+  getRevenueHistory,
+  getClientStats,
+  updateClientTick,
+  updateClientBilling,
+  distributeClientRevenue,
+  runPgQuery
+};
