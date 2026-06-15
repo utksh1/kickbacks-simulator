@@ -175,7 +175,6 @@ export default function App() {
     if (onlineCount === 0) return;
 
     let runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
-    let totalTodayRun = 0;
     let totalClientsCount = 0;
     let allClientsList = [];
     const uniqueProfiles = {};
@@ -183,7 +182,6 @@ export default function App() {
     Object.keys(statuses).forEach(url => {
       const s = statuses[url];
       if (s && s.online) {
-        totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
         const runningClients = s.clients || [];
         allClientsList = [
           ...allClientsList,
@@ -202,6 +200,7 @@ export default function App() {
       }
     });
 
+    const totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
     const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
 
     const newMetrics = {
@@ -435,8 +434,6 @@ export default function App() {
     Object.keys(statuses).forEach(url => {
       const s = statuses[url];
       if (s && s.online) {
-        totalTodayRun += parseFloat(s.totals?.earnedTodayRun || 0);
-        
         const runningClients = s.clients || [];
         allClientsList = [
           ...allClientsList,
@@ -456,6 +453,7 @@ export default function App() {
         });
       }
     });
+    totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
     totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
     uniqueProfilesCount = Object.keys(uniqueProfiles).length;
 
