@@ -402,7 +402,7 @@ app.get('/api/status', checkAuth, async (req, res) => {
 
   let dbClients = [];
   try {
-    dbClients = await getClientStats();
+    dbClients = await getClientStats(process.env.INSTANCE_NAME || 'default');
   } catch (err) {
     console.error("SYSTEM: Failed to load client stats from DB:", err.message);
   }

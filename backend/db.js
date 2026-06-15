@@ -156,11 +156,13 @@ async function getRevenueHistory(limitHours = 24) {
   return [];
 }
 
-// Client Persistent Statistics helper functions
-async function getClientStats() {
+async function getClientStats(instanceName = 'default') {
   if (process.env.DATABASE_URL) {
     try {
-      const res = await runPgQuery('SELECT * FROM client_stats ORDER BY client_name ASC;');
+      const res = await runPgQuery(
+        'SELECT * FROM client_stats WHERE instance_name = $1 ORDER BY client_name ASC;',
+        [instanceName]
+      );
       return res.rows || [];
     } catch (err) {
       console.error("SYSTEM: getClientStats error:", err.message);
