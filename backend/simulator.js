@@ -405,4 +405,21 @@ async function start() {
   });
 }
 
+// Exception handlers
+process.on('uncaughtException', (err) => {
+  console.error('[Simulator] Uncaught Exception:', err.stack || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Simulator] Unhandled Rejection:', reason);
+});
+
+// Graceful Shutdown
+function handleShutdown(signal) {
+  console.log(`\n[Simulator] Received ${signal}. Stopping virtual clients...`);
+  process.exit(0);
+}
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+
 start();

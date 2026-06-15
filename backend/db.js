@@ -4,18 +4,35 @@ const path = require('path');
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const INSTANCE_NAME = process.env.INSTANCE_NAME || 'default';
 
-async function runPgQuery(query, params = []) {
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function runPgQuery(query, params = [], retries = 3, delay = 1000) {
   const { Client } = require('pg');
-  const client = new Client({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for Render PostgreSQL connections
-  });
-  await client.connect();
-  try {
-    const res = await client.query(query, params);
-    return res;
-  } finally {
-    await client.end();
+  
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const client = new Client({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false } // Required for Render PostgreSQL connections
+    });
+    
+    try {
+      await client.connect();
+      const res = await client.query(query, params);
+      return res;
+    } catch (err) {
+      console.error(`DATABASE: PostgreSQL query error (Attempt ${attempt}/${retries}):`, err.message);
+      if (attempt === retries) {
+        throw err;
+      }
+      await sleep(delay);
+      delay *= 2; // Exponential backoff
+    } finally {
+      try {
+        await client.end();
+      } catch (endErr) {
+        // Ignore connection close errors
+      }
+    }
   }
 }
 
