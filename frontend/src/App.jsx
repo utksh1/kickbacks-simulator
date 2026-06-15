@@ -594,27 +594,64 @@ export default function App() {
         {/* TAB 1: DASHBOARD VIEW */}
         {activeTab === 'dashboard' && (
           <div>
-            {/* Parchment Hero Tile */}
-            <section className="hero-tile-parchment">
-              <h2>{totalClientsCount} Active Simulators</h2>
-              <p className="tagline">headlessly spinning client metrics and logging revenue streams in PostgreSQL.</p>
-              
-              <div className="hero-metrics-row">
-                <div className="hero-metric-item">
-                  <p className="hero-metric-label">RUN REVENUE</p>
-                  <p className="hero-metric-val green">${totalTodayRun.toFixed(4)}</p>
+            <section className="ops-hero">
+              <div className="ops-hero-copy">
+                <div className="hero-eyebrow">
+                  <Compass size={15} />
+                  Live simulator fleet
                 </div>
-                <div className="hero-metric-item">
-                  <p className="hero-metric-label">REAL ACCOUNT TOTAL</p>
-                  <p className="hero-metric-val">${totalCurrentToday.toFixed(2)}</p>
+                <h1>{totalClientsCount} active simulator{totalClientsCount === 1 ? '' : 's'}</h1>
+                <p>
+                  Monitor backend health, client billing ticks, and daily revenue without leaving the control surface.
+                </p>
+                <div className="hero-signal-row" aria-label="Backend status overview">
+                  {instances.map(url => (
+                    <span
+                      key={url}
+                      className={`hero-signal ${statuses[url]?.online ? 'online' : 'offline'} ${statuses[url]?.running ? 'running' : ''}`}
+                      title={`${statuses[url]?.instanceName || url}: ${statuses[url]?.online ? 'online' : 'offline'}`}
+                    />
+                  ))}
                 </div>
-                <div className="hero-metric-item">
-                  <p className="hero-metric-label">TOTAL SPANNING</p>
-                  <p className="hero-metric-val blue">{allClientsList.length}</p>
+              </div>
+
+              <div className="hero-meter">
+                <div className="hero-meter-icon">
+                  <CircleDollarSign size={22} />
                 </div>
-                <div className="hero-metric-item">
-                  <p className="hero-metric-label">ACTIVE BACKENDS</p>
-                  <p className="hero-metric-val">{onlineCount}/{instances.length}</p>
+                <p className="hero-meter-label">Run revenue</p>
+                <p className="hero-meter-value">${totalTodayRun.toFixed(4)}</p>
+                <p className="hero-meter-footnote">Real account total: ${totalCurrentToday.toFixed(2)}</p>
+              </div>
+            </section>
+
+            <section className="metric-strip" aria-label="Fleet summary">
+              <div className="metric-tile">
+                <Sparkles size={18} />
+                <div>
+                  <p className="metric-label">Client span</p>
+                  <p className="metric-value">{allClientsList.length}</p>
+                </div>
+              </div>
+              <div className="metric-tile">
+                <Server size={18} />
+                <div>
+                  <p className="metric-label">Backends online</p>
+                  <p className="metric-value">{onlineCount}/{instances.length}</p>
+                </div>
+              </div>
+              <div className="metric-tile">
+                <Activity size={18} />
+                <div>
+                  <p className="metric-label">Running backends</p>
+                  <p className="metric-value">{runningBackends}</p>
+                </div>
+              </div>
+              <div className="metric-tile">
+                <Cpu size={18} />
+                <div>
+                  <p className="metric-label">Profiles tracked</p>
+                  <p className="metric-value">{Object.keys(uniqueProfiles).length}</p>
                 </div>
               </div>
             </section>
@@ -623,30 +660,37 @@ export default function App() {
             <section className="store-cards-grid">
               {instances.map(url => {
                 const s = statuses[url];
+                const activeClients = s?.clients?.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length || 0;
                 return (
-                  <div key={url} className="store-utility-card">
+                  <div
+                    key={url}
+                    className={`store-utility-card ${s?.online ? 'online' : 'offline'} ${s?.running ? 'running' : 'stopped'}`}
+                  >
                     <div>
                       <div className="card-top">
                         <div>
                           <h3 className="card-title">{s?.instanceName || url.replace('https://', '')}</h3>
                           <p className="card-subtitle">{url}</p>
                         </div>
-                        <span className={s?.online ? 'status-dot-active' : 'status-dot-inactive'}></span>
+                        <div className="card-status">
+                          <span className={s?.online ? 'status-dot-active' : 'status-dot-inactive'}></span>
+                          <span>{s?.online ? 'Online' : 'Offline'}</span>
+                        </div>
                       </div>
                       
                       <div className="card-middle">
                         <div className="card-metric-block">
                           <p className="label">Status</p>
-                          <p className="val" style={{ color: s?.online ? (s.running ? 'var(--color-success)' : 'var(--colors-ink)') : 'var(--color-danger)' }}>
+                          <p className={`val ${s?.online ? (s.running ? 'success' : 'neutral') : 'danger'}`}>
                             {s?.online ? (s.running ? 'Running' : 'Stopped') : 'Offline'}
                           </p>
                         </div>
                         
                         {s?.online && (
                           <div className="card-metric-block">
-                            <p className="label">Clients Count</p>
+                            <p className="label">Clients</p>
                             <p className="val">
-                              {s.clients?.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length || 0} active
+                              {activeClients} active
                             </p>
                           </div>
                         )}
@@ -665,7 +709,7 @@ export default function App() {
                         </button>
                       )}
                       {!s?.online && (
-                        <button className="btn-dark-utility hollow" style={{ opacity: 0.5, cursor: 'not-allowed' }} disabled>
+                        <button className="btn-dark-utility hollow disabled" disabled>
                           Offline
                         </button>
                       )}
@@ -675,63 +719,71 @@ export default function App() {
               })}
             </section>
 
-            {/* High contrast Minimal Client List */}
-            <section className="section-card">
-              <h2>Connected Virtual Clients</h2>
+            <section className="panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Live clients</p>
+                  <h2>Connected virtual clients</h2>
+                </div>
+                <span className="panel-count">{allClientsList.length}</span>
+              </div>
               
               {allClientsList.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--colors-ink-muted-48)' }}>
-                  <AlertCircle size={28} style={{ marginBottom: 12 }} />
+                <div className="empty-state">
+                  <AlertCircle size={30} />
+                  <h3>No active clients yet</h3>
                   <p>No active simulator clients. Launch simulators to fetch live metrics.</p>
                 </div>
               ) : (
-                <table className="client-table">
-                  <thead>
-                    <tr>
-                      <th>Instance</th>
-                      <th>Client Name</th>
-                      <th>Ad Render Title</th>
-                      <th>Ticks</th>
-                      <th>Bills</th>
-                      <th>Revenue</th>
-                      <th>Last Status</th>
-                      <th>Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allClientsList.map((client, idx) => {
-                      const isBilled = client.lastStatus?.includes('Billed');
-                      const isSuccess = client.lastStatus?.includes('Success');
-                      const isStopped = client.lastStatus?.includes('Stopped');
-                      
-                      let chipClass = 'neutral';
-                      if (isBilled) chipClass = 'blue';
-                      else if (isSuccess) chipClass = 'green';
-                      else if (isStopped) chipClass = 'red';
+                <div className="table-shell">
+                  <table className="client-table">
+                    <thead>
+                      <tr>
+                        <th>Instance</th>
+                        <th>Client</th>
+                        <th>Ad render</th>
+                        <th>Ticks</th>
+                        <th>Bills</th>
+                        <th>Revenue</th>
+                        <th>Status</th>
+                        <th>Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allClientsList.map((client, idx) => {
+                        const isBilled = client.lastStatus?.includes('Billed');
+                        const isSuccess = client.lastStatus?.includes('Success');
+                        const isStopped = client.lastStatus?.includes('Stopped');
+                        
+                        let chipClass = 'neutral';
+                        if (isBilled) chipClass = 'blue';
+                        else if (isSuccess) chipClass = 'green';
+                        else if (isStopped) chipClass = 'red';
 
-                      return (
-                        <tr key={idx}>
-                          <td>
-                            <span style={{ fontWeight: '600' }}>{client.instanceName}</span>
-                          </td>
-                          <td>{client.name}</td>
-                          <td>{client.adTitle || <span style={{ color: 'var(--colors-ink-muted-48)' }}>None</span>}</td>
-                          <td style={{ fontWeight: '600' }}>{client.ticks || 0}</td>
-                          <td style={{ fontWeight: '600' }}>{client.billing_count || 0}</td>
-                          <td style={{ fontWeight: '600', color: 'var(--color-success)' }}>
-                            ${parseFloat(client.revenue_usd || 0).toFixed(6)}
-                          </td>
-                          <td>
-                            <span className={`chip ${chipClass}`}>
-                              {client.lastStatus || 'Initial'}
-                            </span>
-                          </td>
-                          <td style={{ color: 'var(--colors-ink-muted-48)' }}>{client.lastTickTime || 'Never'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                        return (
+                          <tr key={idx}>
+                            <td>
+                              <span className="cell-strong">{client.instanceName}</span>
+                            </td>
+                            <td>{client.name}</td>
+                            <td>{client.adTitle || <span className="muted-text">None</span>}</td>
+                            <td className="cell-number">{client.ticks || 0}</td>
+                            <td className="cell-number">{client.billing_count || 0}</td>
+                            <td className="cell-money">
+                              ${parseFloat(client.revenue_usd || 0).toFixed(6)}
+                            </td>
+                            <td>
+                              <span className={`chip ${chipClass}`}>
+                                {client.lastStatus || 'Initial'}
+                              </span>
+                            </td>
+                            <td className="muted-text">{client.lastTickTime || 'Never'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
           </div>
@@ -739,23 +791,31 @@ export default function App() {
 
         {/* TAB 2: ANALYTICS */}
         {activeTab === 'analytics' && (
-          <div className="section-card">
-            <h2>Revenue Growth Snapshots</h2>
-            <p style={{ color: 'var(--colors-ink-muted-48)', fontSize: '14px', marginTop: '-16px', marginBottom: '32px' }}>
-              Real-time daily revenue tracking loaded dynamically from PostgreSQL.
+          <div className="panel analytics-panel">
+            <div className="panel-header">
+              <div>
+                <p className="panel-kicker">PostgreSQL snapshots</p>
+                <h2>Revenue growth</h2>
+              </div>
+              <span className="panel-count">{Object.keys(revenueHistories).length}</span>
+            </div>
+            <p className="panel-description">
+              Real-time daily revenue tracking loaded dynamically from each online backend.
             </p>
             
             {historyLoading ? (
-              <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--colors-ink-muted-48)' }}>
-                Loading graphs...
+              <div className="chart-placeholder">
+                <div className="loading-ring small" aria-label="Loading chart" />
+                <span>Loading graph data...</span>
               </div>
             ) : Object.keys(revenueHistories).length === 0 ? (
-              <div style={{ height: '300px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--colors-ink-muted-48)' }}>
-                <Ban size={28} style={{ marginBottom: 12 }} />
+              <div className="empty-state tall">
+                <Ban size={30} />
+                <h3>No revenue history yet</h3>
                 <p>No historical database data logged yet.</p>
               </div>
             ) : (
-              <div style={{ position: 'relative', height: '400px', width: '100%' }}>
+              <div className="chart-frame">
                 <Line data={renderChartData()} options={chartOptions} />
               </div>
             )}
@@ -764,19 +824,25 @@ export default function App() {
 
         {/* TAB 3: CONFIGURATION */}
         {activeTab === 'config' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
-            {/* Endpoints settings */}
-            <div className="section-card" style={{ height: 'fit-content' }}>
-              <h2>Render API Endpoints</h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+          <div className="config-layout">
+            <div className="panel endpoint-panel">
+              <div className="panel-header compact">
+                <div>
+                  <p className="panel-kicker">Backends</p>
+                  <h2>Render API endpoints</h2>
+                </div>
+              </div>
+
+              <div className="endpoint-list">
                 {instances.map(url => (
-                  <div key={url} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: '#fafafc', border: '1px solid var(--hairline)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
+                  <div key={url} className="endpoint-row">
+                    <span>{url}</span>
                     <button 
-                      className="btn-dark-utility hollow" 
-                      style={{ padding: '6px', border: 'none', color: 'var(--color-danger)' }}
+                      className="icon-button danger ghost"
                       onClick={() => handleRemoveInstance(url)}
                       disabled={instances.length <= 1}
+                      title="Remove endpoint"
+                      aria-label={`Remove ${url}`}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -786,8 +852,8 @@ export default function App() {
 
               <form onSubmit={handleAddInstance}>
                 <div className="form-group">
-                  <label htmlFor="newBackendUrl">New Endpoint</label>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <label htmlFor="newBackendUrl">New endpoint</label>
+                  <div className="inline-form">
                     <input 
                       id="newBackendUrl"
                       type="text" 
@@ -796,7 +862,7 @@ export default function App() {
                       value={newUrl}
                       onChange={e => setNewUrl(e.target.value)}
                     />
-                    <button type="submit" className="btn-primary" style={{ width: 'auto', padding: '10px 14px' }}>
+                    <button type="submit" className="icon-button primary" title="Add endpoint" aria-label="Add endpoint">
                       <Plus size={14} />
                     </button>
                   </div>
@@ -804,10 +870,14 @@ export default function App() {
               </form>
             </div>
 
-            {/* Config Sync editor */}
-            <div className="section-card">
-              <h2>Simulator Configurations</h2>
-              <p style={{ color: 'var(--colors-ink-muted-48)', fontSize: '14px', marginTop: '-16px', marginBottom: '24px' }}>
+            <div className="panel config-editor-panel">
+              <div className="panel-header compact">
+                <div>
+                  <p className="panel-kicker">Profiles</p>
+                  <h2>Simulator configuration</h2>
+                </div>
+              </div>
+              <p className="panel-description">
                 Updates are stored in PostgreSQL and reloaded immediately on both active instances.
               </p>
 
@@ -823,12 +893,11 @@ export default function App() {
                 
                 <button 
                   type="submit" 
-                  className="btn-primary" 
-                  style={{ width: 'auto', display: 'flex', gap: '8px', alignItems: 'center', float: 'right' }}
+                  className="btn-primary submit-config"
                   disabled={configSaving}
                 >
                   <Settings size={14} />
-                  {configSaving ? 'Saving...' : 'Save Config & Restart'}
+                  {configSaving ? 'Saving...' : 'Save config and restart'}
                 </button>
               </form>
             </div>
@@ -839,9 +908,12 @@ export default function App() {
         {activeTab === 'logs' && (
           <div className="console-frame">
             <div className="console-topbar">
-              <h3 className="console-title">Live Log Stream</h3>
+              <div>
+                <p className="console-kicker">Instance stream</p>
+                <h3 className="console-title">Live log stream</h3>
+              </div>
               
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div className="console-actions">
                 <select 
                   className="console-select"
                   value={selectedLogInstance}
@@ -854,7 +926,7 @@ export default function App() {
                   ))}
                 </select>
 
-                <button className="btn-dark-utility hollow" style={{ color: 'white', borderColor: '#3d3d40', padding: '4px 10px', fontSize: '12px' }} onClick={() => clearInstanceLogs(selectedLogInstance)}>
+                <button className="btn-dark-utility hollow on-dark" onClick={() => clearInstanceLogs(selectedLogInstance)}>
                   Clear
                 </button>
               </div>
@@ -862,7 +934,7 @@ export default function App() {
 
             <div className="console-content">
               {statuses[selectedLogInstance]?.logs?.length === 0 ? (
-                <div style={{ color: '#6e6e73', textAlign: 'center', padding: '40px' }}>No logs recorded.</div>
+                <div className="console-empty">No logs recorded.</div>
               ) : (
                 (statuses[selectedLogInstance]?.logs || []).map((log, idx) => (
                   <div key={idx} className="console-row">
