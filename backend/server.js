@@ -7,9 +7,9 @@ const { loadConfig, saveRevenueHistory, getRevenueHistory } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'Ankitsin';
 
+// Authentication Middleware
 function checkAuth(req, res, next) {
   if (!DASHBOARD_PASSWORD) {
     return next();
@@ -26,8 +26,8 @@ function checkAuth(req, res, next) {
 }
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
+// Global CORS Middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
@@ -57,9 +57,9 @@ function startSimulator() {
 
   appendLog("SYSTEM: Starting simulator process...");
   
-  // Fork simulator.js
+  // Fork simulator.js located in the same directory
   simulatorProcess = fork(path.join(__dirname, 'simulator.js'), [], {
-    silent: true // so we can capture stdout/stderr stream
+    silent: true // Capture stdout/stderr stream
   });
 
   simulatorProcess.stdout.on('data', (data) => {
@@ -101,7 +101,6 @@ function startSimulator() {
         prof.currentLifetimeMicros = lifetimeMicros;
         prof.blocked = blocked;
         
-        // Calculate earnings this run in USD
         prof.earnedTodayRun = Math.max(0, (todayMicros - prof.initialTodayMicros) / 1000000);
         prof.earnedLifetimeRun = Math.max(0, (lifetimeMicros - prof.initialLifetimeMicros) / 1000000);
       }
@@ -132,7 +131,7 @@ function startSimulator() {
         clients[clientName].adId = adId;
       }
     } else if (msg.type === 'client_tick') {
-      const { clientName, clientId, adId, adTitle, status, visibleMs } = msg;
+      const { clientName, clientId, adId, adTitle, status } = msg;
       if (!clients[clientName]) {
         clients[clientName] = {
           name: clientName,
@@ -161,7 +160,6 @@ function startSimulator() {
   simulatorProcess.on('exit', (code, signal) => {
     appendLog(`SYSTEM: Simulator process exited (code: ${code}, signal: ${signal})`);
     simulatorProcess = null;
-    // Keep profiles and clients state, but mark clients as inactive
     Object.keys(clients).forEach(k => {
       clients[k].lastStatus = 'Stopped';
     });
@@ -180,7 +178,17 @@ function stopSimulator() {
 // Auto-start simulator on boot
 startSimulator();
 
-// API routes
+// Health/Status API Check at root
+app.get('/', (req, res) => {
+  res.json({
+    status: "online",
+    message: "Kickbacks Simulator Backend API is running. Central dashboard is hosted on Vercel.",
+    instanceName: process.env.INSTANCE_NAME || 'default',
+    running: simulatorProcess !== null
+  });
+});
+
+// Authentication checks
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
   if (password === DASHBOARD_PASSWORD) {
@@ -194,7 +202,7 @@ app.get('/api/status', checkAuth, async (req, res) => {
   try {
     configProfiles = await loadConfig();
   } catch (err) {
-    // ignore
+    // Ignore error
   }
 
   // Aggregate totals
@@ -259,7 +267,7 @@ app.post('/api/config', checkAuth, async (req, res) => {
     const { saveConfig } = require('./db');
     await saveConfig(newConfig);
     
-    // Automatically restart simulator to apply changes
+    // Automatically restart simulator to apply config changes
     appendLog("SYSTEM: Configuration updated via settings panel. Restarting simulator...");
     stopSimulator();
     setTimeout(() => {
@@ -282,5 +290,5 @@ app.get('/api/revenue-history', checkAuth, async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Kickbacks Simulator Dashboard is live at http://localhost:${PORT}\n`);
+  console.log(`\n🚀 Kickbacks Simulator Backend is live at http://localhost:${PORT}\n`);
 });
