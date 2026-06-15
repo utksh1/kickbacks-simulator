@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kickbacks Simulator Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-bg"></div>
+  
+  <div class="container">
+    <header class="header">
+      <div class="title-section">
+        <h1>Kickbacks Simulator Dashboard</h1>
+        <div class="status-badge" id="service-status">
+          <span class="status-dot"></span>
+          <span class="status-text">Checking...</span>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="btn-toggle" class="btn btn-primary">Start Simulator</button>
+        <button id="btn-clear-logs" class="btn btn-secondary">Clear Logs</button>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <!-- Total Earnings Card -->
+      <section class="card earnings-card">
+        <div class="card-header">
+          <h2>Earnings This Run</h2>
+          <span class="subtitle">Real-time server updates</span>
+        </div>
+        <div class="earnings-value-wrapper">
+          <div class="earnings-main">
+            <span class="currency">$</span>
+            <span class="value" id="earned-run">0.000000</span>
+          </div>
+          <p class="description">Calculated from raw backend account balances.</p>
+        </div>
+        <div class="earnings-sub-grid">
+          <div class="sub-stat">
+            <span class="stat-label">Total Account Today</span>
+            <span class="stat-val" id="total-today">$0.00</span>
+          </div>
+          <div class="sub-stat">
+            <span class="stat-label">Total Account Lifetime</span>
+            <span class="stat-val" id="total-lifetime">$0.00</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Configuration & Accounts -->
+      <section class="card config-card">
+        <div class="card-header">
+          <h2>Active Accounts</h2>
+        </div>
+        <div class="account-list" id="account-list">
+          <div class="loading-placeholder">Loading profiles...</div>
+        </div>
+      </section>
+
+      <!-- Clients Section -->
+      <section class="card clients-card">
+        <div class="card-header">
+          <h2>Virtual Clients</h2>
+          <span class="badge" id="client-count">0 Active</span>
+        </div>
+        <div class="table-container">
+          <table class="clients-table">
+            <thead>
+              <tr>
+                <th>Client Name</th>
+                <th>Device ID</th>
+                <th>Active Ad</th>
+                <th>Heartbeats</th>
+                <th>Last Status</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody id="clients-tbody">
+              <tr>
+                <td colspan="6" class="no-data">No active virtual clients running.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Live Logs Viewport -->
+      <section class="card logs-card">
+        <div class="card-header">
+          <h2>Live Simulator Logs</h2>
+        </div>
+        <div class="log-viewport" id="log-viewport">
+          <div class="log-line system-line">[SYSTEM] Waiting for simulator connection...</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

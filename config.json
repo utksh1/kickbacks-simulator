@@ -1,0 +1,14 @@
+[
+  {
+    "name": "client_primary",
+    "clientId": "1a1844a55570cd700d300cb0",
+    "refreshToken": "X3Pw8Rnpk7tH3OIodJcRqHXqYOubLymgOV70ElswCV7IuXVE_r8S09NM83mWkN_h",
+    "scale": 10
+  },
+  {
+    "name": "client_secondary_example",
+    "clientId": "insert_another_unique_24_char_hex_here",
+    "refreshToken": "insert_another_account_refresh_token_here",
+    "scale": 1
+  }
+]
