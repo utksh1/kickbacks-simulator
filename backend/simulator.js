@@ -256,8 +256,18 @@ class TokenManager {
   }
 
   invalidateToken() {
+    if (this.accessToken) {
+      console.log(`[Auth:${this.profile.name}] Invalidating access token (will refresh on next use).`);
+    }
     this.accessToken = null;
     this.profile.accessToken = null;
+    // Also clear from DB so other instances don't keep using the dead token
+    loadConfig().then(config => {
+      if (config[this.index]) {
+        config[this.index].accessToken = null;
+        saveConfig(config).catch(() => {});
+      }
+    }).catch(() => {});
   }
 
   async getEarnings() {
@@ -384,7 +394,27 @@ async function runVirtualClient(name, clientId, authManager) {
       if (!res.ok) {
         console.warn(`[${name}] Metric ${eventType} returned HTTP status: ${res.status}`);
         if (res.status === 401 || res.status === 403) {
+          // Invalidate and REFRESH — don't just invalidate and hope
           authManager.invalidateToken();
+          const newToken = await authManager.refresh();
+          if (newToken) {
+            // Retry once with the fresh token
+            try {
+              headers['authorization'] = `Bearer ${newToken}`;
+              const retryRes = await fetch(`${BACKEND_BASE}/v1/metrics`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body)
+              });
+              if (retryRes.ok) {
+                console.log(`[${name}] Metric ${eventType} retry succeeded (status: ${retryRes.status})`);
+              }
+              return retryRes.status;
+            } catch (retryErr) {
+              console.error(`[${name}] Metric ${eventType} retry failed:`, retryErr.message);
+              return null;
+            }
+          }
         }
       } else {
         console.log(`[${name}] Metric ${eventType} sent successfully (status: ${res.status})`);
