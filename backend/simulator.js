@@ -222,12 +222,25 @@ class TokenManager {
         this.circuitBreakerBackoffMs = 30000;
         this.circuitBreakerUntil = 0;
 
-        try {
-          const latestConfig = await loadConfig();
-          latestConfig[this.index] = this.profile;
-          await saveConfig(latestConfig);
-        } catch (dbErr) {
-          console.error(`[Auth:${this.profile.name}] Failed to save updated token to DB:`, dbErr.message);
+        // CRITICAL: This save MUST succeed. The old refresh token is already
+        // consumed by the API. If we fail to persist the new one, all instances
+        // are permanently locked out until a manual re-mint.
+        let saved = false;
+        for (let saveAttempt = 1; saveAttempt <= 3; saveAttempt++) {
+          try {
+            const latestConfig = await loadConfig();
+            latestConfig[this.index] = this.profile;
+            await saveConfig(latestConfig);
+            saved = true;
+            console.log(`[Auth:${this.profile.name}] ✅ New token saved to DB (attempt ${saveAttempt}).`);
+            break;
+          } catch (dbErr) {
+            console.error(`[Auth:${this.profile.name}] ⚠️  CRITICAL: DB save failed (attempt ${saveAttempt}/3):`, dbErr.message);
+            if (saveAttempt < 3) await sleep(2000 * saveAttempt);
+          }
+        }
+        if (!saved) {
+          console.error(`[Auth:${this.profile.name}] 🚨 CRITICAL: All DB save attempts failed! New refresh token may be lost. Token in memory: ${newRefreshToken.substring(0, 10)}...`);
         }
 
         return this.accessToken;
