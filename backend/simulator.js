@@ -11,6 +11,9 @@ const EXT_VERSION = "0.3.177";
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Distributed lock key for PG advisory lock (same across all instances)
+const REFRESH_LOCK_KEY = 999777;
+
 class TokenManager {
   constructor(profile, index, config) {
     this.profile = profile;
@@ -18,6 +21,10 @@ class TokenManager {
     this.config = config;
     this.accessToken = profile.accessToken || null;
     this.refreshPromise = null;
+    // Circuit breaker: tracks consecutive hard-401 failures on refresh
+    this.consecutiveRefreshFailures = 0;
+    this.circuitBreakerBackoffMs = 30000; // starts at 30s, doubles each failure
+    this.circuitBreakerUntil = 0; // timestamp until which we should NOT attempt refresh
   }
 
   async getAccessToken() {
@@ -28,6 +35,13 @@ class TokenManager {
         this.accessToken = currentProfile.accessToken;
         this.profile.refreshToken = currentProfile.refreshToken;
         this.profile.accessToken = currentProfile.accessToken;
+        // If we got a valid token from DB, reset circuit breaker
+        if (this.consecutiveRefreshFailures > 0) {
+          console.log(`[Auth:${this.profile.name}] Got fresh token from DB. Resetting circuit breaker.`);
+          this.consecutiveRefreshFailures = 0;
+          this.circuitBreakerBackoffMs = 30000;
+          this.circuitBreakerUntil = 0;
+        }
       }
     } catch (err) {
       console.warn(`[Auth:${this.profile.name}] Failed to load latest config from DB inside getAccessToken:`, err.message);
@@ -38,75 +52,93 @@ class TokenManager {
   }
 
   async refresh(retries = 3, delay = 5000) {
+    // Circuit breaker: if we've failed too many times, don't even try
+    if (this.circuitBreakerUntil > Date.now()) {
+      const waitSec = Math.round((this.circuitBreakerUntil - Date.now()) / 1000);
+      console.warn(`[Auth:${this.profile.name}] Circuit breaker OPEN. Refresh token appears dead. Waiting ${waitSec}s before next attempt. Re-run 'node mint.js' to get a new token.`);
+      return null;
+    }
+
     if (this.refreshPromise) return this.refreshPromise;
 
     this.refreshPromise = (async () => {
-      for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-          const latestConfig = await loadConfig();
-          const currentProfile = latestConfig[this.index];
-          if (currentProfile && currentProfile.accessToken && currentProfile.refreshToken !== this.profile.refreshToken) {
-            console.log(`[Auth:${this.profile.name}] Detected another instance refreshed the token. Using updated token.`);
-            this.accessToken = currentProfile.accessToken;
-            this.profile.refreshToken = currentProfile.refreshToken;
-            this.profile.accessToken = currentProfile.accessToken;
-            return this.accessToken;
-          }
-        } catch (err) {
-          console.warn(`[Auth:${this.profile.name}] DB check failed inside refresh:`, err.message);
+      // Step 1: Check if another instance already refreshed
+      try {
+        const latestConfig = await loadConfig();
+        const currentProfile = latestConfig[this.index];
+        if (currentProfile && currentProfile.accessToken && currentProfile.refreshToken !== this.profile.refreshToken) {
+          console.log(`[Auth:${this.profile.name}] Another instance already refreshed. Using updated token.`);
+          this.accessToken = currentProfile.accessToken;
+          this.profile.refreshToken = currentProfile.refreshToken;
+          this.profile.accessToken = currentProfile.accessToken;
+          this.consecutiveRefreshFailures = 0;
+          this.circuitBreakerBackoffMs = 30000;
+          this.circuitBreakerUntil = 0;
+          return this.accessToken;
         }
+        // Even if refresh token is the same, maybe access token was updated
+        if (currentProfile && currentProfile.accessToken) {
+          this.accessToken = currentProfile.accessToken;
+          this.profile.accessToken = currentProfile.accessToken;
+          this.profile.refreshToken = currentProfile.refreshToken;
+          return this.accessToken;
+        }
+      } catch (err) {
+        console.warn(`[Auth:${this.profile.name}] DB check failed inside refresh:`, err.message);
+      }
 
-        console.log(`[Auth:${this.profile.name}] Refreshing access token (Attempt ${attempt}/${retries})...`);
-        try {
-          const res = await fetch(`${BACKEND_BASE}/v1/auth/refresh`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ refresh_token: this.profile.refreshToken })
-          });
+      // Step 2: Try to acquire PG advisory lock for distributed refresh
+      const { runPgQuery } = require('./db');
+      let gotLock = false;
+      try {
+        const lockRes = await runPgQuery('SELECT pg_try_advisory_lock($1) as locked;', [REFRESH_LOCK_KEY]);
+        gotLock = lockRes.rows[0]?.locked === true;
+      } catch (err) {
+        console.warn(`[Auth:${this.profile.name}] Could not acquire PG advisory lock:`, err.message);
+        // Fall through — if DB is down, attempt refresh anyway
+        gotLock = true;
+      }
 
-          if (res.status === 429) {
-            console.warn(`[Auth:${this.profile.name}] Rate limited (429). Retrying in ${delay / 1000}s...`);
-            await sleep(delay);
-            delay *= 2;
-            continue;
-          }
-
-          if (!res.ok) {
-            console.error(`[Auth:${this.profile.name}] Failed to refresh token. Status: ${res.status}`);
-            return null;
-          }
-
-          const body = await res.json();
-          if (!body.access_token) {
-            console.error(`[Auth:${this.profile.name}] Response missing access_token`);
-            return null;
-          }
-
-          this.accessToken = body.access_token;
-          const newRefreshToken = body.refresh_token || this.profile.refreshToken;
-
-          console.log(`[Auth:${this.profile.name}] Refresh token rotated successfully. Saving updated config with accessToken...`);
-          this.profile.refreshToken = newRefreshToken;
-          this.profile.accessToken = this.accessToken;
-
+      if (!gotLock) {
+        // Another instance holds the lock — wait for it to finish, then read the result
+        console.log(`[Auth:${this.profile.name}] Another instance is refreshing. Waiting for lock release...`);
+        for (let wait = 0; wait < 6; wait++) {
+          await sleep(3000);
           try {
             const latestConfig = await loadConfig();
-            latestConfig[this.index] = this.profile;
-            await saveConfig(latestConfig);
-          } catch (dbErr) {
-            console.error(`[Auth:${this.profile.name}] Failed to save updated token to DB:`, dbErr.message);
+            const currentProfile = latestConfig[this.index];
+            if (currentProfile && currentProfile.accessToken) {
+              this.accessToken = currentProfile.accessToken;
+              this.profile.refreshToken = currentProfile.refreshToken;
+              this.profile.accessToken = currentProfile.accessToken;
+              console.log(`[Auth:${this.profile.name}] Got refreshed token from DB (written by another instance).`);
+              this.consecutiveRefreshFailures = 0;
+              this.circuitBreakerBackoffMs = 30000;
+              this.circuitBreakerUntil = 0;
+              return this.accessToken;
+            }
+          } catch (err) {
+            // keep waiting
           }
+        }
+        console.warn(`[Auth:${this.profile.name}] Timed out waiting for lock holder. Will attempt refresh ourselves.`);
+      }
 
-          return this.accessToken;
-        } catch (err) {
-          console.error(`[Auth:${this.profile.name}] Network error on attempt ${attempt}:`, err.message);
-          if (attempt < retries) {
-            await sleep(delay);
-            delay *= 2;
+      // Step 3: We have the lock (or timed out waiting). Actually refresh.
+      let refreshResult = null;
+      try {
+        refreshResult = await this._doRefresh(retries, delay);
+      } finally {
+        // Release the advisory lock
+        if (gotLock) {
+          try {
+            await runPgQuery('SELECT pg_advisory_unlock($1);', [REFRESH_LOCK_KEY]);
+          } catch (err) {
+            // Ignore unlock errors
           }
         }
       }
-      return null;
+      return refreshResult;
     })();
 
     try {
@@ -114,6 +146,100 @@ class TokenManager {
     } finally {
       this.refreshPromise = null;
     }
+  }
+
+  async _doRefresh(retries = 3, delay = 5000) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      // Re-check DB before each attempt (another instance may have finished)
+      try {
+        const latestConfig = await loadConfig();
+        const currentProfile = latestConfig[this.index];
+        if (currentProfile && currentProfile.accessToken && currentProfile.refreshToken !== this.profile.refreshToken) {
+          console.log(`[Auth:${this.profile.name}] Token was refreshed by another instance between attempts. Using it.`);
+          this.accessToken = currentProfile.accessToken;
+          this.profile.refreshToken = currentProfile.refreshToken;
+          this.profile.accessToken = currentProfile.accessToken;
+          this.consecutiveRefreshFailures = 0;
+          this.circuitBreakerBackoffMs = 30000;
+          this.circuitBreakerUntil = 0;
+          return this.accessToken;
+        }
+        // Sync refresh token from DB in case it changed
+        if (currentProfile && currentProfile.refreshToken) {
+          this.profile.refreshToken = currentProfile.refreshToken;
+        }
+      } catch (err) {
+        console.warn(`[Auth:${this.profile.name}] DB re-check failed:`, err.message);
+      }
+
+      console.log(`[Auth:${this.profile.name}] Refreshing access token (Attempt ${attempt}/${retries})...`);
+      try {
+        const res = await fetch(`${BACKEND_BASE}/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ refresh_token: this.profile.refreshToken })
+        });
+
+        if (res.status === 429) {
+          console.warn(`[Auth:${this.profile.name}] Rate limited (429). Retrying in ${delay / 1000}s...`);
+          await sleep(delay);
+          delay *= 2;
+          continue;
+        }
+
+        if (res.status === 401) {
+          console.error(`[Auth:${this.profile.name}] Refresh token REJECTED (401). Token is dead.`);
+          this.consecutiveRefreshFailures++;
+          if (this.consecutiveRefreshFailures >= 3) {
+            // Trip the circuit breaker — stop trying for a while
+            this.circuitBreakerUntil = Date.now() + this.circuitBreakerBackoffMs;
+            console.error(`[Auth:${this.profile.name}] ⚠️  CIRCUIT BREAKER TRIPPED after ${this.consecutiveRefreshFailures} consecutive failures. Pausing refresh for ${this.circuitBreakerBackoffMs / 1000}s. Run 'node mint.js' to get a new token.`);
+            this.circuitBreakerBackoffMs = Math.min(this.circuitBreakerBackoffMs * 2, 600000); // max 10 min
+          }
+          return null;
+        }
+
+        if (!res.ok) {
+          console.error(`[Auth:${this.profile.name}] Failed to refresh token. Status: ${res.status}`);
+          return null;
+        }
+
+        const body = await res.json();
+        if (!body.access_token) {
+          console.error(`[Auth:${this.profile.name}] Response missing access_token`);
+          return null;
+        }
+
+        this.accessToken = body.access_token;
+        const newRefreshToken = body.refresh_token || this.profile.refreshToken;
+
+        console.log(`[Auth:${this.profile.name}] ✅ Token refreshed successfully. Saving to DB...`);
+        this.profile.refreshToken = newRefreshToken;
+        this.profile.accessToken = this.accessToken;
+
+        // Reset circuit breaker on success
+        this.consecutiveRefreshFailures = 0;
+        this.circuitBreakerBackoffMs = 30000;
+        this.circuitBreakerUntil = 0;
+
+        try {
+          const latestConfig = await loadConfig();
+          latestConfig[this.index] = this.profile;
+          await saveConfig(latestConfig);
+        } catch (dbErr) {
+          console.error(`[Auth:${this.profile.name}] Failed to save updated token to DB:`, dbErr.message);
+        }
+
+        return this.accessToken;
+      } catch (err) {
+        console.error(`[Auth:${this.profile.name}] Network error on attempt ${attempt}:`, err.message);
+        if (attempt < retries) {
+          await sleep(delay);
+          delay *= 2;
+        }
+      }
+    }
+    return null;
   }
 
   invalidateToken() {
