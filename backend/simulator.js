@@ -20,11 +20,25 @@ class TokenManager {
     this.index = index;
     this.config = config;
     this.accessToken = profile.accessToken || null;
-    this.refreshPromise = null;
+    this.refreshInFlight = null;
     // Circuit breaker: tracks consecutive hard-401 failures on refresh
     this.consecutiveRefreshFailures = 0;
     this.circuitBreakerBackoffMs = 30000; // starts at 30s, doubles each failure
     this.circuitBreakerUntil = 0; // timestamp until which we should NOT attempt refresh
+    this.preemptiveTimer = null;
+    this.tokenAgeMs = 0;
+  }
+
+  startPreemptiveRefresh() {
+    if (this.preemptiveTimer) clearInterval(this.preemptiveTimer);
+    this.preemptiveTimer = setInterval(() => {
+      this.tokenAgeMs += 60000;
+      // Kickbacks tokens last ~60 minutes. Refresh preemptively at 50 minutes.
+      if (this.tokenAgeMs >= 50 * 60 * 1000) {
+        console.log(`[Auth:${this.profile.name}] Preemptive refresh triggered (token is 50+ mins old).`);
+        this.refresh().catch(err => console.error(`[Auth:${this.profile.name}] Preemptive refresh failed:`, err.message));
+      }
+    }, 60000);
   }
 
   async getAccessToken() {
@@ -32,9 +46,12 @@ class TokenManager {
       const latestConfig = await loadConfig();
       const currentProfile = latestConfig[this.index];
       if (currentProfile && currentProfile.accessToken) {
-        this.accessToken = currentProfile.accessToken;
-        this.profile.refreshToken = currentProfile.refreshToken;
-        this.profile.accessToken = currentProfile.accessToken;
+        if (this.accessToken !== currentProfile.accessToken) {
+          this.accessToken = currentProfile.accessToken;
+          this.profile.refreshToken = currentProfile.refreshToken;
+          this.profile.accessToken = currentProfile.accessToken;
+          this.tokenAgeMs = 0; // Reset age since we got a new token from DB
+        }
         // If we got a valid token from DB, reset circuit breaker
         if (this.consecutiveRefreshFailures > 0) {
           console.log(`[Auth:${this.profile.name}] Got fresh token from DB. Resetting circuit breaker.`);
@@ -59,9 +76,9 @@ class TokenManager {
       return null;
     }
 
-    if (this.refreshPromise) return this.refreshPromise;
+    if (this.refreshInFlight) return this.refreshInFlight;
 
-    this.refreshPromise = (async () => {
+    this.refreshInFlight = (async () => {
       // Step 1: Check if another instance already refreshed
       try {
         const latestConfig = await loadConfig();
@@ -74,6 +91,7 @@ class TokenManager {
           this.consecutiveRefreshFailures = 0;
           this.circuitBreakerBackoffMs = 30000;
           this.circuitBreakerUntil = 0;
+          this.tokenAgeMs = 0;
           return this.accessToken;
         }
         // Even if refresh token is the same, maybe access token was updated
@@ -88,10 +106,12 @@ class TokenManager {
       }
 
       // Step 2: Try to acquire PG advisory lock for distributed refresh
-      const { runPgQuery } = require('./db');
+      const { getPgClient } = require('./db');
+      let pgClient = null;
       let gotLock = false;
       try {
-        const lockRes = await runPgQuery('SELECT pg_try_advisory_lock($1) as locked;', [REFRESH_LOCK_KEY]);
+        pgClient = await getPgClient();
+        const lockRes = await pgClient.query('SELECT pg_try_advisory_lock($1) as locked;', [REFRESH_LOCK_KEY]);
         gotLock = lockRes.rows[0]?.locked === true;
       } catch (err) {
         console.warn(`[Auth:${this.profile.name}] Could not acquire PG advisory lock:`, err.message);
@@ -102,12 +122,13 @@ class TokenManager {
       if (!gotLock) {
         // Another instance holds the lock — wait for it to finish, then read the result
         console.log(`[Auth:${this.profile.name}] Another instance is refreshing. Waiting for lock release...`);
+        if (pgClient) { pgClient.release(); pgClient = null; }
         for (let wait = 0; wait < 6; wait++) {
           await sleep(3000);
           try {
             const latestConfig = await loadConfig();
             const currentProfile = latestConfig[this.index];
-            if (currentProfile && currentProfile.accessToken) {
+            if (currentProfile && currentProfile.accessToken && currentProfile.refreshToken !== this.profile.refreshToken) {
               this.accessToken = currentProfile.accessToken;
               this.profile.refreshToken = currentProfile.refreshToken;
               this.profile.accessToken = currentProfile.accessToken;
@@ -115,6 +136,7 @@ class TokenManager {
               this.consecutiveRefreshFailures = 0;
               this.circuitBreakerBackoffMs = 30000;
               this.circuitBreakerUntil = 0;
+              this.tokenAgeMs = 0;
               return this.accessToken;
             }
           } catch (err) {
@@ -130,21 +152,24 @@ class TokenManager {
         refreshResult = await this._doRefresh(retries, delay);
       } finally {
         // Release the advisory lock
-        if (gotLock) {
+        if (gotLock && pgClient) {
           try {
-            await runPgQuery('SELECT pg_advisory_unlock($1);', [REFRESH_LOCK_KEY]);
+            await pgClient.query('SELECT pg_advisory_unlock($1);', [REFRESH_LOCK_KEY]);
           } catch (err) {
             // Ignore unlock errors
           }
+          pgClient.release();
+        } else if (pgClient) {
+          pgClient.release();
         }
       }
       return refreshResult;
     })();
 
     try {
-      return await this.refreshPromise;
+      return await this.refreshInFlight;
     } finally {
-      this.refreshPromise = null;
+      this.refreshInFlight = null;
     }
   }
 
@@ -162,6 +187,7 @@ class TokenManager {
           this.consecutiveRefreshFailures = 0;
           this.circuitBreakerBackoffMs = 30000;
           this.circuitBreakerUntil = 0;
+          this.tokenAgeMs = 0;
           return this.accessToken;
         }
         // Sync refresh token from DB in case it changed
@@ -217,10 +243,11 @@ class TokenManager {
         this.profile.refreshToken = newRefreshToken;
         this.profile.accessToken = this.accessToken;
 
-        // Reset circuit breaker on success
+        // Reset circuit breaker and age on success
         this.consecutiveRefreshFailures = 0;
         this.circuitBreakerBackoffMs = 30000;
         this.circuitBreakerUntil = 0;
+        this.tokenAgeMs = 0;
 
         // CRITICAL: This save MUST succeed. The old refresh token is already
         // consumed by the API. If we fail to persist the new one, all instances
@@ -555,6 +582,7 @@ async function start() {
 
   activeProfiles.forEach(({ p, idx }) => {
     const authManager = new TokenManager(p, idx, config);
+    authManager.startPreemptiveRefresh();
     const scaleFactor = p.scale || 1;
     console.log(`[Profile:${p.name}] Spawning ${scaleFactor} virtual clients...`);
 

@@ -43,6 +43,11 @@ async function runPgQuery(query, params = [], retries = 3, delay = 1000) {
   }
 }
 
+async function getPgClient() {
+  if (!pool) throw new Error("PostgreSQL pool is not initialized.");
+  return await pool.connect();
+}
+
 async function loadConfig() {
   if (process.env.DATABASE_URL) {
     try {
@@ -279,5 +284,6 @@ module.exports = {
   updateClientAd,
   updateClientBilling,
   distributeClientRevenue,
-  runPgQuery
+  runPgQuery,
+  getPgClient
 };
