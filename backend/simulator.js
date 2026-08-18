@@ -14,7 +14,7 @@ const clientEnv = {
   arch: process.arch,
   os_version: os.release(),
   editor: "Visual Studio Code",
-  mode: "v1"
+  mode: "boosted"
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -422,7 +422,7 @@ async function runVirtualClient(name, clientId, authManager) {
       human_activity_age_s: Math.floor(Math.random() * 3) + 1,
       focus_age_s: Math.floor(Math.random() * 2),
       window_id: params.windowId || ("win-" + crypto.randomBytes(4).toString("hex")),
-      tier: "tier1",
+      tier: "tier2",
       ext: clientEnv
     };
 
