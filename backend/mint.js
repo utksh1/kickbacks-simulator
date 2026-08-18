@@ -39,6 +39,23 @@ async function mint() {
         console.log(`clientId: ${clientId}`);
         console.log(`refreshToken: ${credentials.refresh_token}`);
         console.log("-----------------------------------------");
+
+        // Auto-accept Terms of Service so earnings are credited
+        try {
+          const tosRes = await fetch(`${BACKEND_BASE}/v1/me/consent`, {
+            method: "POST",
+            headers: { "authorization": `Bearer ${credentials.access_token}`, "content-type": "application/json" }
+          });
+          if (tosRes.ok) {
+            const tosData = await tosRes.json();
+            console.log(`✅ TOS Accepted (version: ${tosData.tos_version}, telemetry: ${tosData.telemetry_opt_in})`);
+          } else {
+            console.log(`⚠️ TOS acceptance returned ${tosRes.status} — accept manually via the extension.`);
+          }
+        } catch (e) {
+          console.log(`⚠️ TOS acceptance failed: ${e.message}`);
+        }
+
         console.log("Copy the values above and paste them into config.json.");
       } else if (pollRes.status !== 202) {
         console.log(`Polling status: ${pollRes.status}. Retrying...`);
