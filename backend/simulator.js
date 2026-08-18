@@ -570,6 +570,17 @@ async function runVirtualClient(name, clientId, authManager) {
           windowId
         });
 
+        // 2% natural click-through simulation for high publisher quality score
+        if (Math.random() < 0.02) {
+          console.log(`[${name}] Simulating natural ad interaction (click)...`);
+          await sendMetric("click", ad, {
+            corr: "cliclick." + ad.ad_id,
+            surface: "statusline",
+            sessionNonce,
+            windowId
+          });
+        }
+
         if (process.send) {
           process.send({
             type: 'client_billing',
@@ -579,20 +590,30 @@ async function runVirtualClient(name, clientId, authManager) {
             status: billingStatus
           });
         }
+
+        // Once threshold is satisfied and acknowledged, conclude current show after 1 final tick
+        setTimeout(() => {
+          endShow();
+          // Natural developer coding pause between prompts (15 - 35s)
+          const humanPauseMs = 15000 + Math.floor(Math.random() * 20000);
+          console.log(`[${name}] Impression completed. Next prompt simulation in ${(humanPauseMs/1000).toFixed(1)}s...`);
+          if (rotationTimer) clearTimeout(rotationTimer);
+          rotationTimer = setTimeout(rotateAd, humanPauseMs);
+        }, tickIntervalMs);
       }
     }, tickIntervalMs);
   }
 
   async function rotateAd() {
+    endShow();
     const portfolio = await fetchPortfolio();
     if (portfolio && portfolio.ad) {
       activeAd = portfolio.ad;
       await startShow(activeAd, portfolio.viewThresholdMs, portfolio.tickIntervalMs);
-      if (rotationTimer) clearTimeout(rotationTimer);
-      rotationTimer = setTimeout(rotateAd, portfolio.rotationIntervalMs);
     } else {
+      console.log(`[${name}] No ad returned or in cooldown. Retrying in 20s...`);
       if (rotationTimer) clearTimeout(rotationTimer);
-      rotationTimer = setTimeout(rotateAd, 30000);
+      rotationTimer = setTimeout(rotateAd, 20000);
     }
   }
 
