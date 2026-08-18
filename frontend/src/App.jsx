@@ -11,7 +11,7 @@ const MuiLineChart = lazy(() =>
 );
 
 const DEFAULT_INSTANCES = [
-  'http://localhost:3001',
+  'https://r5.utksh.in',
   'http://localhost:3002',
   'http://localhost:3003',
   'http://localhost:3004'
@@ -82,7 +82,7 @@ export default function App() {
   const verifyPassword = useCallback(async (pass) => {
     setAuthChecking(true);
     setAuthError('');
-    const testUrl = instances[0] || 'http://localhost:3001';
+    const testUrl = instances[0] || 'https://r5.utksh.in';
     try {
       const res = await fetch(`${testUrl}/api/login`, {
         method: 'POST',
