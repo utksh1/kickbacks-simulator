@@ -160,7 +160,7 @@ export default function App() {
     };
 
     fetchAllStatuses();
-    const interval = setInterval(fetchAllStatuses, 5000);
+    const interval = setInterval(fetchAllStatuses, 2000);
     return () => clearInterval(interval);
   }, [isAuthorized, instances, password, refreshTrigger]);
 
@@ -942,13 +942,14 @@ export default function App() {
                       {allClientsList.map((client, idx) => {
                         const isBilled = client.lastStatus?.includes('Billed');
                         const isSuccess = client.lastStatus?.includes('Success');
+                        const isViewing = client.lastStatus?.includes('Viewing');
                         const isRotating = client.lastStatus?.includes('Next prompt') || client.lastStatus?.includes('Rotating');
                         const isError = client.lastStatus?.includes('Error');
                         const isStopped = client.lastStatus?.includes('Stopped');
                         
                         let chipClass = 'neutral';
                         if (isBilled) chipClass = 'blue';
-                        else if (isSuccess) chipClass = 'green';
+                        else if (isSuccess || isViewing) chipClass = 'green';
                         else if (isRotating) chipClass = 'purple';
                         else if (isError) chipClass = 'red';
                         else if (isStopped) chipClass = 'neutral';

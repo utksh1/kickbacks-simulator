@@ -549,7 +549,7 @@ async function runVirtualClient(name, clientId, authManager) {
           clientId: clientId,
           adId: ad.ad_id,
           adTitle: ad.title_text,
-          status: status,
+          status: `Viewing (${(accruedVisibleMs/1000).toFixed(0)}s / ${(viewThresholdMs/1000).toFixed(0)}s)`,
           visibleMs: accruedVisibleMs
         });
       }
