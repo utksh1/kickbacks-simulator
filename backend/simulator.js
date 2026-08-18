@@ -602,8 +602,8 @@ async function runVirtualClient(name, clientId, authManager) {
         // Once threshold is satisfied and acknowledged, conclude current show after 1 final tick
         setTimeout(() => {
           endShow();
-          // 10-second alternating pause between prompts for clean relay
-          const humanPauseMs = 10000;
+          // High-throughput parallel prompt pause (5 - 9s)
+          const humanPauseMs = 5000 + Math.floor(Math.random() * 4000);
           console.log(`[${name}] Impression completed. Next prompt simulation in ${(humanPauseMs/1000).toFixed(1)}s...`);
           
           if (process.send) {
@@ -703,8 +703,8 @@ async function start() {
         : crypto.randomBytes(12).toString("hex");
 
       const virtualName = `${p.name}_v${c + 1}`;
-      const count = endIdx - startIdx;
-      const startDelay = count > 1 ? (c - startIdx) * Math.floor(20000 / count) : 0;
+      // Parallel execution: start all clients almost simultaneously with 1.5s jitter
+      const startDelay = (c - startIdx) * 1500;
       setTimeout(() => {
         runVirtualClient(virtualName, virtualClientId, authManager).catch(err => {
           console.error(`Fatal error in virtual client ${virtualName}:`, err);
