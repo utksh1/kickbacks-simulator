@@ -548,6 +548,19 @@ function gracefulShutdown(signal) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 Kickbacks Simulator Backend is live at http://localhost:${PORT}\n`);
+
+  // Auto-start simulator on boot if config has accounts
+  try {
+    const config = await loadConfig();
+    if (Array.isArray(config) && config.length > 0) {
+      console.log(`SYSTEM: Auto-starting simulator with ${config.length} account(s)...`);
+      startSimulator();
+    } else {
+      console.log('SYSTEM: No accounts configured. Use POST /api/start to begin.');
+    }
+  } catch (err) {
+    console.error('SYSTEM: Auto-start check failed:', err.message);
+  }
 });

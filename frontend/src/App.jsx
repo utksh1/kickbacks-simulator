@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
-import { 
+import {
   Activity, ShieldAlert, Cpu, CircleDollarSign, Terminal,
   Settings, LineChart as LineChartIcon, RefreshCw, LogOut, Plus, Trash2,
   Play, Square, AlertCircle, Ban, Server, Compass, Sparkles,
@@ -11,10 +11,7 @@ const MuiLineChart = lazy(() =>
 );
 
 const DEFAULT_INSTANCES = [
-  'https://r5.utksh.in',
-  'http://localhost:3002',
-  'http://localhost:3003',
-  'http://localhost:3004'
+  'https://r5.utksh.in'
 ];
 
 const TABS = [
@@ -417,7 +414,7 @@ export default function App() {
 
   // Aggregate Metrics Calculations
   const onlineCount = Object.values(statuses).filter(s => s.online).length;
-  
+
   let runningBackends = 0;
   let totalTodayRun = 0;
   let totalClientsCount = 0;
@@ -441,7 +438,7 @@ export default function App() {
             instanceName: s.instanceName
           }))
         ];
-        
+
         totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
 
         (s.profiles || []).forEach(p => {
@@ -576,13 +573,13 @@ export default function App() {
           </div>
           <div className="form-group">
             <label htmlFor="authPassword">Password</label>
-            <input 
+            <input
               id="authPassword"
               name="authPassword"
-              type="password" 
-              className="form-input" 
+              type="password"
+              className="form-input"
               placeholder="Master password"
-              required 
+              required
             />
           </div>
           <button type="submit" className="btn-primary" disabled={authChecking}>
@@ -675,7 +672,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="app-container content-wrapper">
-        
+
         {/* TAB 1: DASHBOARD VIEW */}
         {activeTab === 'dashboard' && (
           <div>
@@ -799,7 +796,7 @@ export default function App() {
                           <span>{s?.online ? 'Online' : 'Offline'}</span>
                         </div>
                       </div>
-                      
+
                       <div className="card-middle">
                         <div className="card-metric-block">
                           <p className="label">Status</p>
@@ -807,7 +804,7 @@ export default function App() {
                             {s?.online ? (s.running ? 'Running' : 'Stopped') : 'Offline'}
                           </p>
                         </div>
-                        
+
                         {s?.online && (
                           <div className="card-metric-block">
                             <p className="label">Clients</p>
@@ -916,7 +913,7 @@ export default function App() {
                 </div>
                 <span className="panel-count">{allClientsList.length}</span>
               </div>
-              
+
               {allClientsList.length === 0 ? (
                 <div className="empty-state">
                   <AlertCircle size={30} />
@@ -946,7 +943,7 @@ export default function App() {
                         const isRotating = client.lastStatus?.includes('Next prompt') || client.lastStatus?.includes('Rotating');
                         const isError = client.lastStatus?.includes('Error');
                         const isStopped = client.lastStatus?.includes('Stopped');
-                        
+
                         let chipClass = 'neutral';
                         if (isBilled) chipClass = 'blue';
                         else if (isSuccess || isViewing) chipClass = 'green';
@@ -996,7 +993,7 @@ export default function App() {
             <p className="panel-description">
               Real-time daily revenue tracking loaded dynamically from each online backend.
             </p>
-            
+
             {historyLoading ? (
               <div className="chart-placeholder">
                 <div className="loading-ring small" aria-label="Loading chart" />
@@ -1087,7 +1084,7 @@ export default function App() {
                 {instances.map(url => (
                   <div key={url} className="endpoint-row">
                     <span>{url}</span>
-                    <button 
+                    <button
                       className="icon-button danger ghost"
                       onClick={() => handleRemoveInstance(url)}
                       disabled={instances.length <= 1}
@@ -1104,10 +1101,10 @@ export default function App() {
                 <div className="form-group">
                   <label htmlFor="newBackendUrl">New endpoint</label>
                   <div className="inline-form">
-                    <input 
+                    <input
                       id="newBackendUrl"
-                      type="text" 
-                      className="form-input" 
+                      type="text"
+                      className="form-input"
                       placeholder="https://example.onrender.com"
                       value={newUrl}
                       onChange={e => setNewUrl(e.target.value)}
@@ -1133,16 +1130,16 @@ export default function App() {
 
               <form onSubmit={saveConfiguration}>
                 <div className="form-group">
-                  <textarea 
+                  <textarea
                     className="configurator-textarea"
                     value={configJson}
                     onChange={e => setConfigJson(e.target.value)}
                     required
                   />
                 </div>
-                
-                <button 
-                  type="submit" 
+
+                <button
+                  type="submit"
                   className="btn-primary submit-config"
                   disabled={configSaving}
                 >
@@ -1162,9 +1159,9 @@ export default function App() {
                 <p className="console-kicker">Instance stream</p>
                 <h3 className="console-title">Live log stream</h3>
               </div>
-              
+
               <div className="console-actions">
-                <select 
+                <select
                   className="console-select"
                   value={selectedLogInstance}
                   onChange={e => setSelectedLogInstance(e.target.value)}
