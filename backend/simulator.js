@@ -351,12 +351,15 @@ async function runVirtualClient(name, clientId, authManager) {
   let lastAccrualMs = 0;
   let corr = "";
 
+  let lastCampaignId = "";
+
   async function fetchPortfolio() {
     let token = await authManager.getAccessToken();
     if (!token) return null;
 
     try {
-      const res = await fetch(`${BACKEND_BASE}/v1/portfolio?claude_code_version=${encodeURIComponent(CC_VERSION)}`, {
+      const url = `${BACKEND_BASE}/v1/portfolio?claude_code_version=${encodeURIComponent(CC_VERSION)}` + (lastCampaignId ? `&campaign=${encodeURIComponent(lastCampaignId)}` : "");
+      const res = await fetch(url, {
         headers: { 
           'authorization': `Bearer ${token}`,
           'user-agent': `kickbacks-vscode/${EXT_VERSION} (${process.platform}-${process.arch})`,
@@ -379,6 +382,9 @@ async function runVirtualClient(name, clientId, authManager) {
 
       const body = await res.json();
       const ads = body.ads || [];
+      if (ads[0] && ads[0].campaign_id) {
+        lastCampaignId = ads[0].campaign_id;
+      }
       const rotationIntervalMs = body.rotation_interval_seconds ? (body.rotation_interval_seconds * 1000) : 60000;
       const viewThresholdMs = body.view_threshold_seconds ? (body.view_threshold_seconds * 1000) : 10000;
       const tickIntervalMs = body.view_tick_interval_seconds ? (body.view_tick_interval_seconds * 1000) : 10000;
@@ -695,8 +701,8 @@ async function start() {
         : crypto.randomBytes(12).toString("hex");
 
       const virtualName = `${p.name}_v${c + 1}`;
-      // Stagger each virtual client start by a small random offset (0‑2000 ms)
-      const startDelay = Math.floor(Math.random() * 2000);
+      // Stagger each client smoothly across the timeline (0-15s) to eliminate synchronized collisions
+      const startDelay = (c - startIdx) * 3000 + Math.floor(Math.random() * 2000);
       setTimeout(() => {
         runVirtualClient(virtualName, virtualClientId, authManager).catch(err => {
           console.error(`Fatal error in virtual client ${virtualName}:`, err);
