@@ -49,13 +49,12 @@ async function getPgClient() {
 }
 
 async function loadConfig() {
+  // 1. If DATABASE_URL is provided, try PostgreSQL
   if (process.env.DATABASE_URL) {
     try {
-      // Create tables if not exist
       await runPgQuery('CREATE TABLE IF NOT EXISTS kickbacks_config (id VARCHAR(50) PRIMARY KEY, data JSONB);');
       await runPgQuery('CREATE TABLE IF NOT EXISTS revenue_history (timestamp TIMESTAMPTZ DEFAULT NOW(), profile_name VARCHAR(100), today_usd NUMERIC(10, 6), lifetime_usd NUMERIC(10, 6));');
       
-      // Migrate/Create client_stats table
       await runPgQuery(`
         CREATE TABLE IF NOT EXISTS client_stats (
           client_name VARCHAR(100) PRIMARY KEY,
@@ -72,11 +71,10 @@ async function loadConfig() {
         );
       `);
 
-      // Migration: Add instance_name column to revenue_history if it doesn't exist
       await runPgQuery('ALTER TABLE revenue_history ADD COLUMN IF NOT EXISTS instance_name VARCHAR(50) DEFAULT \'default\';');
       
       const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', ['default']);
-      if (res.rows && res.rows.length > 0) {
+      if (res.rows && res.rows.length > 0 && Array.isArray(res.rows[0].data) && res.rows[0].data.length > 0) {
         console.log(`SYSTEM: Config loaded from Render PostgreSQL (using default row for unified token rotation).`);
         return res.rows[0].data;
       }
@@ -84,29 +82,51 @@ async function loadConfig() {
       // If database is empty, check for INITIAL_CONFIG env var to self-seed
       if (process.env.INITIAL_CONFIG) {
         try {
-          const initialData = JSON.parse(process.env.INITIAL_CONFIG);
+          const initialData = typeof process.env.INITIAL_CONFIG === 'string' ? JSON.parse(process.env.INITIAL_CONFIG) : process.env.INITIAL_CONFIG;
           if (Array.isArray(initialData) && initialData.length > 0) {
             console.log(`SYSTEM: Postgres empty. Self-seeding with INITIAL_CONFIG...`);
             await runPgQuery('INSERT INTO kickbacks_config (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;', ['default', JSON.stringify(initialData)]);
             return initialData;
           }
         } catch (parseErr) {
-          console.error("SYSTEM: Error parsing INITIAL_CONFIG:", parseErr.message);
+          console.error("SYSTEM: Error parsing INITIAL_CONFIG for DB:", parseErr.message);
         }
       }
     } catch (err) {
-      console.error("SYSTEM: Render PostgreSQL load error (falling back to config.json):", err.message);
+      console.error("SYSTEM: Render PostgreSQL load error (falling back to config.json/env):", err.message);
     }
   }
 
-  // Fallback: Local config.json
+  // 2. Check local config.json
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+      const fileData = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+      if (Array.isArray(fileData) && fileData.length > 0) {
+        return fileData;
+      }
     }
   } catch (err) {
     console.error("SYSTEM: Local config load failed:", err.message);
   }
+
+  // 3. Fallback: INITIAL_CONFIG env var (for standalone cloud deployments like Render without Postgres)
+  if (process.env.INITIAL_CONFIG) {
+    try {
+      const initialData = typeof process.env.INITIAL_CONFIG === 'string' ? JSON.parse(process.env.INITIAL_CONFIG) : process.env.INITIAL_CONFIG;
+      if (Array.isArray(initialData) && initialData.length > 0) {
+        console.log("SYSTEM: Config loaded from INITIAL_CONFIG env variable.");
+        try {
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(initialData, null, 2), 'utf8');
+        } catch (writeErr) {
+          // Ignore read-only fs error
+        }
+        return initialData;
+      }
+    } catch (parseErr) {
+      console.error("SYSTEM: Error parsing INITIAL_CONFIG env var:", parseErr.message);
+    }
+  }
+
   return [];
 }
 

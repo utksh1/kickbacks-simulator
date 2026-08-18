@@ -336,8 +336,8 @@ function stopSimulator() {
   return true;
 }
 
-// Auto-start simulator on boot
-startSimulator();
+// Auto-start is handled after DB/config initialization in app.listen
+
 
 // Reset this instance's clients in DB to Stopped on boot in case of crash
 loadConfig().then(() => {
