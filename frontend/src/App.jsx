@@ -11,12 +11,10 @@ const MuiLineChart = lazy(() =>
 );
 
 const DEFAULT_INSTANCES = [
-  'https://r.utksh.in',
-  'https://r1.utksh.in',
-  'https://r2.utksh.in',
-  'https://r3.utksh.in',
-  'https://r4.utksh.in',
-  'https://r5.utksh.in'
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://localhost:3004'
 ];
 
 const TABS = [
@@ -42,14 +40,11 @@ export default function App() {
   const [instances, setInstances] = useState(() => {
     const saved = localStorage.getItem('dashboard_instances');
     let list = saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
-    list = list.filter(item => !item.includes('revenue.utksh.bar'));
-    const merged = [...list];
-    DEFAULT_INSTANCES.forEach(item => {
-      if (!merged.includes(item)) {
-        merged.push(item);
-      }
-    });
-    return merged;
+    list = list.filter(item => !item.includes('utksh.in') && !item.includes('utksh.bar'));
+    if (!list || list.length === 0) {
+      list = DEFAULT_INSTANCES;
+    }
+    return list;
   });
   const [newUrl, setNewUrl] = useState('');
 
@@ -87,7 +82,7 @@ export default function App() {
   const verifyPassword = useCallback(async (pass) => {
     setAuthChecking(true);
     setAuthError('');
-    const testUrl = instances[0] || 'https://r.utksh.in';
+    const testUrl = instances[0] || 'http://localhost:3001';
     try {
       const res = await fetch(`${testUrl}/api/login`, {
         method: 'POST',
@@ -193,7 +188,7 @@ export default function App() {
         ];
         totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
         (s.profiles || []).forEach(p => {
-          if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
+          if (!uniqueProfiles[p.name] || (uniqueProfiles[p.name].currentLifetimeUsd || 0) < (p.currentLifetimeUsd || 0)) {
             uniqueProfiles[p.name] = p;
           }
         });
@@ -202,10 +197,12 @@ export default function App() {
 
     const totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
     const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+    const totalCurrentLifetime = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
 
     const newMetrics = {
       totalTodayRun,
       totalCurrentToday,
+      totalCurrentLifetime,
       totalClientsCount,
       runningBackends,
       uniqueProfilesCount: Object.keys(uniqueProfiles).length,
@@ -427,6 +424,7 @@ export default function App() {
   let allClientsList = [];
   const uniqueProfiles = {};
   let totalCurrentToday = 0;
+  let totalCurrentLifetime = 0;
   let uniqueProfilesCount = 0;
 
   if (onlineCount > 0) {
@@ -447,7 +445,7 @@ export default function App() {
         totalClientsCount += runningClients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
 
         (s.profiles || []).forEach(p => {
-          if (!uniqueProfiles[p.name] || uniqueProfiles[p.name].currentTodayUsd < p.currentTodayUsd) {
+          if (!uniqueProfiles[p.name] || (uniqueProfiles[p.name].currentLifetimeUsd || 0) < (p.currentLifetimeUsd || 0)) {
             uniqueProfiles[p.name] = p;
           }
         });
@@ -455,6 +453,7 @@ export default function App() {
     });
     totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
     totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
+    totalCurrentLifetime = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
     uniqueProfilesCount = Object.keys(uniqueProfiles).length;
 
     // Track revenue samples for velocity calculation
@@ -710,7 +709,7 @@ export default function App() {
                 </div>
                 <p className="hero-meter-label">Run revenue</p>
                 <p className="hero-meter-value">${totalTodayRun.toFixed(4)}</p>
-                <p className="hero-meter-footnote">Real account total: ${totalCurrentToday.toFixed(2)}</p>
+                <p className="hero-meter-footnote">Account balance: ${totalCurrentLifetime.toFixed(2)} (today: ${totalCurrentToday.toFixed(2)})</p>
                 {revenuePerHour > 0 && (
                   <p className="hero-meter-rate">
                     <TrendingUp size={12} />

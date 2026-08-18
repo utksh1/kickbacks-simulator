@@ -1,7 +1,10 @@
 node_modules/
 .DS_Store
 *.log
+logs/
 scratch/
 .vibe-ads/
 config.json
+backend/config.json
 .env
+.env.*

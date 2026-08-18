@@ -4,8 +4,15 @@
   "description": "Monorepo for Kickbacks Simulator: Node.js backend API & React frontend dashboard",
   "private": true,
   "scripts": {
+    "start": "bash ./start.sh",
+    "stop": "bash ./stop.sh",
     "backend": "cd backend && npm start",
+    "backend:1": "cd backend && PORT=3001 INSTANCE_NAME=instance_1 TOTAL_INSTANCES=4 node server.js",
+    "backend:2": "cd backend && PORT=3002 INSTANCE_NAME=instance_2 TOTAL_INSTANCES=4 node server.js",
+    "backend:3": "cd backend && PORT=3003 INSTANCE_NAME=instance_3 TOTAL_INSTANCES=4 node server.js",
+    "backend:4": "cd backend && PORT=3004 INSTANCE_NAME=instance_4 TOTAL_INSTANCES=4 node server.js",
     "frontend": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build"
+    "build": "cd frontend && npm run build",
+    "test": "npm test --prefix frontend"
   }
 }

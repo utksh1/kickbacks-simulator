@@ -1,13 +1,21 @@
-require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { loadConfig, saveConfig } = require('./db');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const BACKEND_BASE = "https://kickbacks-backend-gmdaqm2c7q-uw.a.run.app";
-const CC_VERSION = "0.3.177";
-const EXT_VERSION = "0.3.177";
+const CC_VERSION = "2.4.1";
+const EXT_VERSION = "2.4.1";
+
+const clientEnv = {
+  os: process.platform,
+  arch: process.arch,
+  os_version: os.release(),
+  editor: "Visual Studio Code",
+  mode: "v1"
+};
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -349,7 +357,11 @@ async function runVirtualClient(name, clientId, authManager) {
 
     try {
       const res = await fetch(`${BACKEND_BASE}/v1/portfolio?claude_code_version=${encodeURIComponent(CC_VERSION)}`, {
-        headers: { 'authorization': `Bearer ${token}` }
+        headers: { 
+          'authorization': `Bearer ${token}`,
+          'user-agent': `kickbacks-vscode/${EXT_VERSION} (${process.platform}-${process.arch})`,
+          'accept': 'application/json'
+        }
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -367,13 +379,15 @@ async function runVirtualClient(name, clientId, authManager) {
 
       const body = await res.json();
       const ads = body.ads || [];
-      const rotationIntervalMs = body.rotation_interval_seconds ? (body.rotation_interval_seconds * 1000) : 120000;
-      const viewThresholdMs = body.view_threshold_seconds ? (body.view_threshold_seconds * 1000) : 15000;
+      const rotationIntervalMs = body.rotation_interval_seconds ? (body.rotation_interval_seconds * 1000) : 60000;
+      const viewThresholdMs = body.view_threshold_seconds ? (body.view_threshold_seconds * 1000) : 10000;
+      const tickIntervalMs = body.view_tick_interval_seconds ? (body.view_tick_interval_seconds * 1000) : 10000;
       
       return {
         ad: ads[0] || null,
         rotationIntervalMs,
-        viewThresholdMs
+        viewThresholdMs,
+        tickIntervalMs
       };
     } catch (err) {
       console.error(`[${name}] Network error fetching portfolio:`, err.message);
@@ -395,15 +409,28 @@ async function runVirtualClient(name, clientId, authManager) {
       claude_code_version: CC_VERSION,
       extension_version: EXT_VERSION,
       nonce: eventUuid,
-      session_token: ad.session_token || ""
+      session_token: ad.session_token || "",
+      session_nonce: params.sessionNonce || crypto.randomUUID(),
+      focus_state: "focused",
+      human_prompt_age_s: Math.floor(Math.random() * 4) + 1,
+      human_activity_age_s: Math.floor(Math.random() * 3) + 1,
+      focus_age_s: Math.floor(Math.random() * 2),
+      window_id: params.windowId || ("win-" + crypto.randomBytes(4).toString("hex")),
+      tier: "tier1",
+      ext: clientEnv
     };
 
     if (params.surface) body.surface = params.surface;
     if (typeof params.visibleMs === 'number') body.visible_ms = params.visibleMs;
+    if (params.viewable !== undefined) body.viewable = params.viewable;
+    if (params.viewPct !== undefined) body.view_pct = params.viewPct;
+    if (params.viewMs !== undefined) body.view_ms = params.viewMs;
 
     const headers = {
       'content-type': 'application/json',
-      'authorization': `Bearer ${token}`
+      'authorization': `Bearer ${token}`,
+      'user-agent': `kickbacks-vscode/${EXT_VERSION} (${process.platform}-${process.arch})`,
+      'accept': 'application/json'
     };
 
     if (params.corr) {
@@ -463,15 +490,18 @@ async function runVirtualClient(name, clientId, authManager) {
     lastAccrualMs = 0;
   }
 
-  async function startShow(ad, viewThresholdMs = 15000) {
+  async function startShow(ad, viewThresholdMs = 10000, tickIntervalMs = 10000) {
     endShow();
     if (!ad) {
       console.log(`[${name}] No active ad returned in portfolio.`);
       return;
     }
 
-    console.log(`[${name}] Active ad: "${ad.title_text}" (ID: ${ad.ad_id}) (Threshold: ${viewThresholdMs}ms)`);
+    console.log(`[${name}] Active ad: "${ad.title_text}" (ID: ${ad.ad_id}) (Threshold: ${viewThresholdMs}ms, Tick: ${tickIntervalMs}ms)`);
     
+    const sessionNonce = crypto.randomUUID();
+    const windowId = "win-" + crypto.randomBytes(4).toString("hex");
+
     if (process.send) {
       process.send({
         type: 'client_ad',
@@ -484,13 +514,13 @@ async function runVirtualClient(name, clientId, authManager) {
 
     // Statusline impression
     const cliCorr = "cli." + ad.ad_id;
-    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusline" });
-    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusline" });
+    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
+    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
 
     // Spinner impression
     const spinnerCorr = "spinner." + ad.ad_id;
-    await sendMetric("impression_rendered", ad, { corr: spinnerCorr, surface: "spinner" });
-    await sendMetric("impression_viewable", ad, { corr: spinnerCorr, surface: "spinner" });
+    await sendMetric("impression_rendered", ad, { corr: spinnerCorr, surface: "spinner", sessionNonce, windowId });
+    await sendMetric("impression_viewable", ad, { corr: spinnerCorr, surface: "spinner", sessionNonce, windowId });
 
     accruedVisibleMs = 0;
     lastAccrualMs = Date.now();
@@ -500,14 +530,16 @@ async function runVirtualClient(name, clientId, authManager) {
     viewTickTimer = setInterval(async () => {
       const now = Date.now();
       const delta = now - lastAccrualMs;
-      if (delta > 0) accruedVisibleMs += Math.min(delta, 5000);
+      if (delta > 0) accruedVisibleMs += Math.min(delta, tickIntervalMs);
       lastAccrualMs = now;
 
       console.log(`[${name}] Tick: Crediting view (${accruedVisibleMs}ms)...`);
       const status = await sendMetric("view_tick", ad, {
         corr,
         surface: "statusline",
-        visibleMs: accruedVisibleMs
+        visibleMs: accruedVisibleMs,
+        sessionNonce,
+        windowId
       });
 
       if (process.send) {
@@ -533,7 +565,9 @@ async function runVirtualClient(name, clientId, authManager) {
           visibleMs: accruedVisibleMs,
           viewable: true,
           viewPct: 100,
-          viewMs: accruedVisibleMs
+          viewMs: accruedVisibleMs,
+          sessionNonce,
+          windowId
         });
 
         if (process.send) {
@@ -546,14 +580,14 @@ async function runVirtualClient(name, clientId, authManager) {
           });
         }
       }
-    }, 5000);
+    }, tickIntervalMs);
   }
 
   async function rotateAd() {
     const portfolio = await fetchPortfolio();
-    if (portfolio) {
+    if (portfolio && portfolio.ad) {
       activeAd = portfolio.ad;
-      await startShow(activeAd, portfolio.viewThresholdMs);
+      await startShow(activeAd, portfolio.viewThresholdMs, portfolio.tickIntervalMs);
       if (rotationTimer) clearTimeout(rotationTimer);
       rotationTimer = setTimeout(rotateAd, portfolio.rotationIntervalMs);
     } else {
@@ -613,10 +647,10 @@ async function start() {
     const instanceMatch = process.env.INSTANCE_NAME?.match(/instance_(\d+)/);
     if (instanceMatch) {
       const idx = parseInt(instanceMatch[1], 10);
-      const totalInstances = 6;
+      const totalInstances = parseInt(process.env.TOTAL_INSTANCES || '4', 10);
       const sliceSize = Math.floor(scaleFactor / totalInstances);
       startIdx = (idx - 1) * sliceSize;
-      endIdx = idx * sliceSize;
+      endIdx = idx === totalInstances ? scaleFactor : idx * sliceSize;
     }
 
     console.log(`[Profile:${p.name}] Spawning client indices ${startIdx} to ${endIdx - 1} (${endIdx - startIdx} clients total)...`);

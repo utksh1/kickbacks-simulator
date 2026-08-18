@@ -11,7 +11,8 @@ const {
   updateClientTick,
   updateClientAd,
   updateClientBilling,
-  distributeClientRevenue
+  distributeClientRevenue,
+  clearLocalClientStats
 } = require('./db');
 
 const app = express();
@@ -186,6 +187,7 @@ function appendLog(message) {
 function startSimulator() {
   if (simulatorProcess) return false;
 
+  clearLocalClientStats(process.env.INSTANCE_NAME || 'default');
   appendLog("SYSTEM: Starting simulator process...");
   
   // Fork simulator.js located in the same directory
@@ -209,7 +211,8 @@ function startSimulator() {
     if (msg.type === 'earnings') {
       const { profileName, todayUsd, lifetimeUsd, todayMicros, lifetimeMicros, blocked } = msg;
       
-      const lastTodayUsd = profiles[profileName]?.currentTodayUsd;
+      const lastTodayMicros = profiles[profileName]?.currentTodayMicros;
+      const lastLifetimeMicros = profiles[profileName]?.currentLifetimeMicros;
 
       if (!profiles[profileName]) {
         profiles[profileName] = {
@@ -238,17 +241,21 @@ function startSimulator() {
         prof.earnedLifetimeRun = Math.max(0, (lifetimeMicros - prof.initialLifetimeMicros) / 1000000);
       }
 
-      // Attribute actual revenue diff to clients
-      if (lastTodayUsd !== undefined && todayUsd > lastTodayUsd) {
-        const diff = todayUsd - lastTodayUsd;
+      // Attribute actual revenue diff to clients with micro-dollar precision
+      const microsDiff = (lastLifetimeMicros !== undefined && lifetimeMicros > lastLifetimeMicros)
+        ? (lifetimeMicros - lastLifetimeMicros)
+        : ((lastTodayMicros !== undefined && todayMicros > lastTodayMicros) ? (todayMicros - lastTodayMicros) : 0);
+
+      if (microsDiff > 0) {
+        const diff = microsDiff / 1000000;
         if (billedClients.length > 0) {
           distributeClientRevenue(billedClients, diff).catch(err => {
             console.error("SYSTEM: Error distributing revenue to billed clients:", err.message);
           });
           billedClients = [];
         } else {
-          // Fallback: distribute to all active clients of this instance in PostgreSQL
-          getClientStats().then(dbClients => {
+          // Fallback: distribute to all active clients of this instance
+          getClientStats(process.env.INSTANCE_NAME || 'default').then(dbClients => {
             const activeNames = dbClients
               .filter(c => c.instance_name === (process.env.INSTANCE_NAME || 'default') && c.last_status !== 'Stopped')
               .map(c => c.client_name);

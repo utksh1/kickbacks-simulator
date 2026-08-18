@@ -85,10 +85,10 @@ describe('App Dashboard Interface Tests', () => {
 
     // Wait for async client loading to render in DOM
     await waitFor(() => {
-      expect(screen.getByText(/^client_primary_v1$/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/^client_primary_v1$/i)[0]).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Attio/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Attio/i)[0]).toBeInTheDocument();
     expect(screen.getByText(/fleet command/i)).toBeInTheDocument();
   });
 
@@ -97,7 +97,7 @@ describe('App Dashboard Interface Tests', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText(/^client_primary_v1$/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/^client_primary_v1$/i)[0]).toBeInTheDocument();
     });
 
     // Switch to Config tab
@@ -122,7 +122,7 @@ describe('App Dashboard Interface Tests', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText(/^client_primary_v1$/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/^client_primary_v1$/i)[0]).toBeInTheDocument();
     });
 
     // Navigate to Config

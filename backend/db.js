@@ -130,6 +130,9 @@ async function saveConfig(config) {
   }
 }
 
+let localClientStats = {};
+let localRevenueHistory = [];
+
 async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
   if (process.env.DATABASE_URL) {
     try {
@@ -153,6 +156,14 @@ async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
     } catch (err) {
       console.error("SYSTEM: Render PostgreSQL saveRevenueHistory error:", err.message);
     }
+  } else {
+    localRevenueHistory.push({
+      timestamp: new Date().toISOString(),
+      profile_name: profileName,
+      today_usd: todayUsd,
+      lifetime_usd: lifetimeUsd
+    });
+    if (localRevenueHistory.length > 200) localRevenueHistory.shift();
   }
 }
 
@@ -172,7 +183,19 @@ async function getRevenueHistory(limitHours = 24) {
       return [];
     }
   }
-  return [];
+  return localRevenueHistory;
+}
+
+function clearLocalClientStats(instanceName) {
+  if (instanceName) {
+    Object.keys(localClientStats).forEach(key => {
+      if (localClientStats[key].instance_name === instanceName) {
+        delete localClientStats[key];
+      }
+    });
+  } else {
+    localClientStats = {};
+  }
 }
 
 async function getClientStats(instanceName = 'default') {
@@ -188,7 +211,7 @@ async function getClientStats(instanceName = 'default') {
       return [];
     }
   }
-  return [];
+  return Object.values(localClientStats).filter(c => c.instance_name === instanceName);
 }
 
 async function updateClientTick(clientName, instanceName, clientId, adId, adTitle, status, lastTickTime) {
@@ -210,6 +233,32 @@ async function updateClientTick(clientName, instanceName, clientId, adId, adTitl
       await runPgQuery(query, [clientName, instanceName, clientId, adId, adTitle, status, lastTickTime]);
     } catch (err) {
       console.error("SYSTEM: updateClientTick DB error:", err.message);
+    }
+  } else {
+    if (!localClientStats[clientName]) {
+      localClientStats[clientName] = {
+        client_name: clientName,
+        instance_name: instanceName,
+        client_id: clientId,
+        ad_id: adId,
+        ad_title: adTitle,
+        ticks: 1,
+        billing_count: 0,
+        revenue_usd: 0,
+        last_status: status,
+        last_tick_time: lastTickTime,
+        updated_at: new Date().toISOString()
+      };
+    } else {
+      const c = localClientStats[clientName];
+      c.instance_name = instanceName;
+      c.client_id = clientId;
+      c.ad_id = adId;
+      c.ad_title = adTitle;
+      c.ticks = (c.ticks || 0) + 1;
+      c.last_status = status;
+      c.last_tick_time = lastTickTime;
+      c.updated_at = new Date().toISOString();
     }
   }
 }
@@ -235,6 +284,32 @@ async function updateClientAd(clientName, instanceName, clientId, adId, adTitle,
     } catch (err) {
       console.error("SYSTEM: updateClientAd DB error:", err.message);
     }
+  } else {
+    if (!localClientStats[clientName]) {
+      localClientStats[clientName] = {
+        client_name: clientName,
+        instance_name: instanceName,
+        client_id: clientId,
+        ad_id: adId,
+        ad_title: adTitle,
+        ticks: 0,
+        billing_count: 0,
+        revenue_usd: 0,
+        last_status: status,
+        last_tick_time: 'Never',
+        updated_at: new Date().toISOString()
+      };
+    } else {
+      const c = localClientStats[clientName];
+      c.instance_name = instanceName;
+      c.client_id = clientId;
+      c.ad_id = adId;
+      c.ad_title = adTitle;
+      if (c.last_status === 'Stopped' || c.last_status === 'inactive' || !c.last_status) {
+        c.last_status = status;
+      }
+      c.updated_at = new Date().toISOString();
+    }
   }
 }
 
@@ -254,22 +329,40 @@ async function updateClientBilling(clientName, status, isSuccess) {
     } catch (err) {
       console.error("SYSTEM: updateClientBilling DB error:", err.message);
     }
+  } else {
+    if (localClientStats[clientName]) {
+      if (isSuccess) {
+        localClientStats[clientName].billing_count = (localClientStats[clientName].billing_count || 0) + 1;
+      }
+      localClientStats[clientName].last_status = status;
+      localClientStats[clientName].updated_at = new Date().toISOString();
+    }
   }
 }
 
 async function distributeClientRevenue(clientNames, amountUsd) {
-  if (process.env.DATABASE_URL && clientNames.length > 0 && amountUsd > 0) {
-    try {
+  if (clientNames.length > 0 && amountUsd > 0) {
+    if (process.env.DATABASE_URL) {
+      try {
+        const share = amountUsd / clientNames.length;
+        const query = `
+          UPDATE client_stats 
+          SET revenue_usd = revenue_usd + $1, updated_at = NOW()
+          WHERE client_name = ANY($2);
+        `;
+        await runPgQuery(query, [share, clientNames]);
+        console.log(`SYSTEM: Distributed $${amountUsd} revenue to clients:`, clientNames);
+      } catch (err) {
+        console.error("SYSTEM: distributeClientRevenue DB error:", err.message);
+      }
+    } else {
       const share = amountUsd / clientNames.length;
-      const query = `
-        UPDATE client_stats 
-        SET revenue_usd = revenue_usd + $1, updated_at = NOW()
-        WHERE client_name = ANY($2);
-      `;
-      await runPgQuery(query, [share, clientNames]);
-      console.log(`SYSTEM: Distributed $${amountUsd} revenue to clients:`, clientNames);
-    } catch (err) {
-      console.error("SYSTEM: distributeClientRevenue DB error:", err.message);
+      clientNames.forEach(name => {
+        if (localClientStats[name]) {
+          localClientStats[name].revenue_usd = (localClientStats[name].revenue_usd || 0) + share;
+        }
+      });
+      console.log(`SYSTEM: Distributed $${amountUsd} revenue in-memory to clients:`, clientNames);
     }
   }
 }
@@ -284,6 +377,7 @@ module.exports = {
   updateClientAd,
   updateClientBilling,
   distributeClientRevenue,
+  clearLocalClientStats,
   runPgQuery,
   getPgClient
 };
