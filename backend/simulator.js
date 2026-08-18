@@ -518,8 +518,10 @@ async function runVirtualClient(name, clientId, authManager) {
       });
     }
 
-    // Statusline impression
+    // Statusbar & Statusline impressions
     const cliCorr = "cli." + ad.ad_id;
+    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusbar", sessionNonce, windowId });
+    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusbar", sessionNonce, windowId });
     await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
     await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
 
@@ -542,7 +544,7 @@ async function runVirtualClient(name, clientId, authManager) {
       console.log(`[${name}] Tick: Crediting view (${accruedVisibleMs}ms)...`);
       const status = await sendMetric("view_tick", ad, {
         corr,
-        surface: "statusline",
+        surface: "statusbar",
         visibleMs: accruedVisibleMs,
         sessionNonce,
         windowId
@@ -567,7 +569,7 @@ async function runVirtualClient(name, clientId, authManager) {
         
         const billingStatus = await sendMetric("view_threshold_met", ad, {
           corr,
-          surface: "statusline",
+          surface: "statusbar",
           visibleMs: accruedVisibleMs,
           viewable: true,
           viewPct: 100,
@@ -581,7 +583,7 @@ async function runVirtualClient(name, clientId, authManager) {
           console.log(`[${name}] Simulating natural ad interaction (click)...`);
           await sendMetric("click", ad, {
             corr: "cliclick." + ad.ad_id,
-            surface: "statusline",
+            surface: "statusbar",
             sessionNonce,
             windowId
           });
@@ -600,8 +602,8 @@ async function runVirtualClient(name, clientId, authManager) {
         // Once threshold is satisfied and acknowledged, conclude current show after 1 final tick
         setTimeout(() => {
           endShow();
-          // Natural developer coding pause between prompts (5 - 11s)
-          const humanPauseMs = 5000 + Math.floor(Math.random() * 6000);
+          // 10-second alternating pause between prompts for clean relay
+          const humanPauseMs = 10000;
           console.log(`[${name}] Impression completed. Next prompt simulation in ${(humanPauseMs/1000).toFixed(1)}s...`);
           
           if (process.send) {
@@ -701,8 +703,8 @@ async function start() {
         : crypto.randomBytes(12).toString("hex");
 
       const virtualName = `${p.name}_v${c + 1}`;
-      // Stagger each client smoothly across the timeline (0-15s) to eliminate synchronized collisions
-      const startDelay = (c - startIdx) * 3000 + Math.floor(Math.random() * 2000);
+      const count = endIdx - startIdx;
+      const startDelay = count > 1 ? (c - startIdx) * Math.floor(20000 / count) : 0;
       setTimeout(() => {
         runVirtualClient(virtualName, virtualClientId, authManager).catch(err => {
           console.error(`Fatal error in virtual client ${virtualName}:`, err);
