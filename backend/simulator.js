@@ -594,12 +594,25 @@ async function runVirtualClient(name, clientId, authManager) {
         // Once threshold is satisfied and acknowledged, conclude current show after 1 final tick
         setTimeout(() => {
           endShow();
-          // Natural developer coding pause between prompts (15 - 35s)
-          const humanPauseMs = 15000 + Math.floor(Math.random() * 20000);
+          // Natural developer coding pause between prompts (5 - 11s)
+          const humanPauseMs = 5000 + Math.floor(Math.random() * 6000);
           console.log(`[${name}] Impression completed. Next prompt simulation in ${(humanPauseMs/1000).toFixed(1)}s...`);
+          
+          if (process.send) {
+            process.send({
+              type: 'client_tick',
+              clientName: name,
+              clientId: clientId,
+              adId: ad.ad_id,
+              adTitle: ad.title_text,
+              status: `Next prompt in ${(humanPauseMs/1000).toFixed(0)}s`,
+              visibleMs: accruedVisibleMs
+            });
+          }
+
           if (rotationTimer) clearTimeout(rotationTimer);
           rotationTimer = setTimeout(rotateAd, humanPauseMs);
-        }, tickIntervalMs);
+        }, 2000);
       }
     }, tickIntervalMs);
   }
@@ -611,9 +624,9 @@ async function runVirtualClient(name, clientId, authManager) {
       activeAd = portfolio.ad;
       await startShow(activeAd, portfolio.viewThresholdMs, portfolio.tickIntervalMs);
     } else {
-      console.log(`[${name}] No ad returned or in cooldown. Retrying in 20s...`);
+      console.log(`[${name}] No ad returned or in cooldown. Retrying in 10s...`);
       if (rotationTimer) clearTimeout(rotationTimer);
-      rotationTimer = setTimeout(rotateAd, 20000);
+      rotationTimer = setTimeout(rotateAd, 10000);
     }
   }
 
