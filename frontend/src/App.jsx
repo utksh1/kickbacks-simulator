@@ -496,16 +496,13 @@ export default function App() {
   }
 
   // Fleet Efficiency
-  const totalTicks = allClientsList.reduce((s, c) => s + (c.ticks || 0), 0);
-  const totalBills = allClientsList.reduce((s, c) => s + (c.billing_count || 0), 0);
   const activeClients = allClientsList.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
-
+  const totalTicks = allClientsList.reduce((sum, c) => sum + (c.ticks || 0), 0);
+  const totalBills = allClientsList.reduce((sum, c) => sum + (c.billing_count || 0), 0);
   const billingSuccessRate = totalTicks > 0 ? ((totalBills / totalTicks) * 100) : 0;
   const revenuePerClient = activeClients > 0 ? (totalTodayRun / activeClients) : 0;
   const revenuePerBackend = runningBackends > 0 ? (totalTodayRun / runningBackends) : 0;
-
-  // Operational Health
-  const errorClients = allClientsList.filter(c => (c.lastStatus || '').includes('Error')).length;
+  const errorClients = allClientsList.filter(c => (c.lastStatus || '').includes('HTTP Error') || (c.lastStatus || '').includes('Billing Error')).length;
   const errorRate = allClientsList.length > 0 ? ((errorClients / allClientsList.length) * 100) : 0;
   const fleetUtilization = allClientsList.length > 0 ? ((activeClients / allClientsList.length) * 100) : 0;
   const avgTicksPerClient = activeClients > 0 ? (totalTicks / activeClients) : 0;
@@ -945,12 +942,16 @@ export default function App() {
                       {allClientsList.map((client, idx) => {
                         const isBilled = client.lastStatus?.includes('Billed');
                         const isSuccess = client.lastStatus?.includes('Success');
+                        const isRotating = client.lastStatus?.includes('Next prompt') || client.lastStatus?.includes('Rotating');
+                        const isError = client.lastStatus?.includes('Error');
                         const isStopped = client.lastStatus?.includes('Stopped');
                         
                         let chipClass = 'neutral';
                         if (isBilled) chipClass = 'blue';
                         else if (isSuccess) chipClass = 'green';
-                        else if (isStopped) chipClass = 'red';
+                        else if (isRotating) chipClass = 'purple';
+                        else if (isError) chipClass = 'red';
+                        else if (isStopped) chipClass = 'neutral';
 
                         return (
                           <tr key={idx}>

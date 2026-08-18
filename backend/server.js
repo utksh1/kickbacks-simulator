@@ -284,7 +284,14 @@ function startSimulator() {
     } else if (msg.type === 'client_tick') {
       const { clientName, clientId, adId, adTitle, status } = msg;
       const lastTickTime = new Date().toLocaleTimeString();
-      const statusStr = status === 200 ? 'Success' : `Error (${status})`;
+      let statusStr = 'Success';
+      if (typeof status === 'string') {
+        statusStr = status;
+      } else if (status === 200 || status === 204) {
+        statusStr = 'Success';
+      } else if (status) {
+        statusStr = `HTTP Error (${status})`;
+      }
       updateClientTick(clientName, process.env.INSTANCE_NAME || 'default', clientId, adId, adTitle, statusStr, lastTickTime).catch(err => {
         console.error("SYSTEM: Error updating client tick in DB:", err.message);
       });
