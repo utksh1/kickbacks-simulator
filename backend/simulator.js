@@ -19,6 +19,15 @@ const clientEnv = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Dynamic surface selection based on campaign type
+// SSP velocity campaigns require 'statusline'/'spinner', direct campaigns use 'statusbar'/'overlay'
+function surfaceForAd(ad) {
+  if (ad && (ad.ad_id?.startsWith('v2:sx:') || ad.campaign_id?.startsWith('sx:'))) {
+    return 'statusline'; // SSP velocity campaigns
+  }
+  return 'statusbar'; // Direct campaigns (default)
+}
+
 // Distributed lock key for PG advisory lock (same across all instances)
 const REFRESH_LOCK_KEY = 999777;
 
@@ -520,8 +529,9 @@ async function runVirtualClient(name, clientId, authManager) {
 
     // Statusbar & Statusline impressions
     const cliCorr = "cli." + ad.ad_id;
-    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusbar", sessionNonce, windowId });
-    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusbar", sessionNonce, windowId });
+    const adSurface = surfaceForAd(ad);
+    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: adSurface, sessionNonce, windowId });
+    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: adSurface, sessionNonce, windowId });
     await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
     await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
 
@@ -544,7 +554,7 @@ async function runVirtualClient(name, clientId, authManager) {
       console.log(`[${name}] Tick: Crediting view (${accruedVisibleMs}ms)...`);
       const status = await sendMetric("view_tick", ad, {
         corr,
-        surface: "statusbar",
+        surface: surfaceForAd(ad),
         visibleMs: accruedVisibleMs,
         sessionNonce,
         windowId
@@ -569,7 +579,7 @@ async function runVirtualClient(name, clientId, authManager) {
         
         const billingStatus = await sendMetric("view_threshold_met", ad, {
           corr,
-          surface: "statusbar",
+          surface: surfaceForAd(ad),
           visibleMs: accruedVisibleMs,
           viewable: true,
           viewPct: 100,
@@ -583,7 +593,7 @@ async function runVirtualClient(name, clientId, authManager) {
           console.log(`[${name}] Simulating natural ad interaction (click)...`);
           await sendMetric("click", ad, {
             corr: "cliclick." + ad.ad_id,
-            surface: "statusbar",
+            surface: surfaceForAd(ad),
             sessionNonce,
             windowId
           });
