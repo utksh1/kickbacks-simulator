@@ -19,13 +19,23 @@ const clientEnv = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Dynamic surface selection based on campaign type
-// SSP velocity campaigns require 'statusline'/'spinner', direct campaigns use 'statusbar'/'overlay'
+// Self-healing adaptive surface resolution system
+// Candidate surfaces ordered by overall reliability across programmatic & direct networks
+const CANDIDATE_SURFACES = ['statusline', 'statusbar', 'overlay', 'banner', 'cursor_overlay', 'spinner'];
+
+// Cache of validated working surfaces keyed by campaign_id
+const validatedSurfaceCache = new Map();
+
 function surfaceForAd(ad) {
-  if (ad && (ad.ad_id?.startsWith('v2:sx:') || ad.campaign_id?.startsWith('sx:'))) {
-    return 'statusline'; // SSP velocity campaigns
+  if (!ad) return 'statusbar';
+  if (validatedSurfaceCache.has(ad.campaign_id)) {
+    return validatedSurfaceCache.get(ad.campaign_id);
   }
-  return 'statusbar'; // Direct campaigns (default)
+  // Heuristic defaults based on known network signatures
+  if (ad.ad_id?.startsWith('v2:sx:') || ad.campaign_id?.startsWith('sx:')) {
+    return 'statusline';
+  }
+  return 'statusbar';
 }
 
 // Distributed lock key for PG advisory lock (same across all instances)
@@ -460,14 +470,19 @@ async function runVirtualClient(name, clientId, authManager) {
         body: JSON.stringify(body)
       });
 
+      let resData = null;
+      try {
+        resData = await res.json();
+      } catch (e) {
+        // Response might not be JSON
+      }
+
       if (!res.ok) {
         console.warn(`[${name}] Metric ${eventType} returned HTTP status: ${res.status}`);
         if (res.status === 401 || res.status === 403) {
-          // Invalidate and REFRESH — don't just invalidate and hope
           authManager.invalidateToken();
           const newToken = await authManager.refresh();
           if (newToken) {
-            // Retry once with the fresh token
             try {
               headers['authorization'] = `Bearer ${newToken}`;
               const retryRes = await fetch(`${BACKEND_BASE}/v1/metrics`, {
@@ -486,6 +501,32 @@ async function runVirtualClient(name, clientId, authManager) {
           }
         }
       } else {
+        // Status 200 OK — check response measurement payload
+        if (resData && typeof resData.measurement === 'string') {
+          if (resData.measurement.includes('surface_mismatch') || resData.measurement.includes('egress_suppressed')) {
+            console.warn(`[${name}] Surface "${body.surface}" rejected (${resData.measurement}) for campaign ${ad.campaign_id}. Auto-probing working surface...`);
+            
+            for (const candidate of CANDIDATE_SURFACES) {
+              if (candidate === body.surface) continue;
+              const probeBody = { ...body, surface: candidate, nonce: crypto.randomUUID() };
+              try {
+                const probeRes = await fetch(`${BACKEND_BASE}/v1/metrics`, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify(probeBody)
+                });
+                const probeData = await probeRes.json();
+                if (probeData && typeof probeData.measurement === 'string' && !probeData.measurement.includes('mismatch') && !probeData.measurement.includes('suppressed')) {
+                  console.log(`[${name}] 🎯 Auto-adapted working surface for campaign ${ad.campaign_id}: "${candidate}" (${probeData.measurement})`);
+                  validatedSurfaceCache.set(ad.campaign_id, candidate);
+                  return probeRes.status;
+                }
+              } catch (probeErr) {
+                // Continue probing next surface candidate
+              }
+            }
+          }
+        }
         console.log(`[${name}] Metric ${eventType} sent successfully (status: ${res.status})`);
       }
       return res.status;
