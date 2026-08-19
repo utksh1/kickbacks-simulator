@@ -568,18 +568,11 @@ async function runVirtualClient(name, clientId, authManager) {
       });
     }
 
-    // Statusbar & Statusline impressions
+    // Send initial impression rendered & viewable for the resolved active surface
     const cliCorr = "cli." + ad.ad_id;
     const adSurface = surfaceForAd(ad);
     await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: adSurface, sessionNonce, windowId });
     await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: adSurface, sessionNonce, windowId });
-    await sendMetric("impression_rendered", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
-    await sendMetric("impression_viewable", ad, { corr: cliCorr, surface: "statusline", sessionNonce, windowId });
-
-    // Spinner impression
-    const spinnerCorr = "spinner." + ad.ad_id;
-    await sendMetric("impression_rendered", ad, { corr: spinnerCorr, surface: "spinner", sessionNonce, windowId });
-    await sendMetric("impression_viewable", ad, { corr: spinnerCorr, surface: "spinner", sessionNonce, windowId });
 
     accruedVisibleMs = 0;
     lastAccrualMs = Date.now();
