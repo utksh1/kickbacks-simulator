@@ -527,7 +527,8 @@ async function runVirtualClient(name, clientId, authManager) {
             }
           }
         }
-        console.log(`[${name}] Metric ${eventType} sent successfully (status: ${res.status})`);
+        const measInfo = resData ? ` [measurement: ${resData.measurement}, billed: ${resData.billed}]` : '';
+        console.log(`[${name}] Metric ${eventType} sent successfully (status: ${res.status}${measInfo})`);
       }
       return res.status;
     } catch (err) {
@@ -674,6 +675,41 @@ async function runVirtualClient(name, clientId, authManager) {
   await rotateAd();
 }
 
+async function ensureBoostedConsent(authManager, profileName) {
+  try {
+    const token = await authManager.getAccessToken();
+    if (!token) return;
+    
+    // 1. Core TOS Consent
+    await fetch(`${BACKEND_BASE}/v1/me/consent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'authorization': `Bearer ${token}` },
+      body: JSON.stringify({ tos_accepted_version: "2026-03-01", accepted: true })
+    }).catch(() => {});
+
+    // 2. Boosted Mode Scoped Consent
+    const res = await fetch(`${BACKEND_BASE}/v1/me/consent/scopes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        scopes: {
+          kickbacks_consent: true,
+          boosted_ack: true
+        },
+        boosted_ack: {
+          accepted: true,
+          version: "v2-scopes-3"
+        }
+      })
+    });
+    if (res.ok) {
+      console.log(`[Auth:${profileName}] 🚀 Boosted Mode consent scopes synchronized (v2-scopes-3).`);
+    }
+  } catch (err) {
+    console.warn(`[Auth:${profileName}] Warning: Boosted consent sync:`, err.message);
+  }
+}
+
 async function start() {
   const config = await loadConfig();
   
@@ -689,9 +725,13 @@ async function start() {
 
   console.log("Starting scaled multi-client simulator with staggered starts...");
 
-  activeProfiles.forEach(({ p, idx }) => {
+  activeProfiles.forEach(async ({ p, idx }) => {
     const authManager = new TokenManager(p, idx, config);
     authManager.startPreemptiveRefresh();
+    
+    // Automatically ensure Boosted Mode consent scopes are active on server
+    await ensureBoostedConsent(authManager, p.name);
+
     const scaleFactor = p.scale || 1;
     console.log(`[Profile:${p.name}] Spawning ${scaleFactor} virtual clients...`);
 
