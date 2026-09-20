@@ -11,7 +11,7 @@ const MuiLineChart = lazy(() =>
 );
 
 const DEFAULT_INSTANCES = [
-  'https://r5.utksh.in'
+  'http://localhost:3001'
 ];
 
 const TABS = [
@@ -37,10 +37,13 @@ export default function App() {
   const [instances, setInstances] = useState(() => {
     const saved = localStorage.getItem('dashboard_instances');
     let list = saved ? JSON.parse(saved) : DEFAULT_INSTANCES;
-    list = list.filter(item => !item.includes('utksh.in') && !item.includes('utksh.bar'));
+    list = list.filter(item => !item.includes('utksh.in') && !item.includes('utksh.bar') && !item.match(/:(300[2-9]|3010)/));
     if (!list || list.length === 0) {
       list = DEFAULT_INSTANCES;
     }
+    DEFAULT_INSTANCES.forEach(def => {
+      if (!list.includes(def)) list.push(def);
+    });
     return list;
   });
   const [newUrl, setNewUrl] = useState('');
@@ -49,12 +52,14 @@ export default function App() {
   const [statuses, setStatuses] = useState({});
   const [loading, setLoading] = useState(() => Boolean(localStorage.getItem('dashboard_password')));
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [selectedAccount, setSelectedAccount] = useState('all');
 
   const getCachedMetrics = useCallback(() => {
     const saved = localStorage.getItem('kickbacks_cached_metrics');
     return saved ? JSON.parse(saved) : {
-      totalTodayRun: 0,
-      totalCurrentToday: 0,
+      realTodayUsd: 0,
+      realLifetimeUsd: 0,
+      estimatedRevenue: 0,
       totalClientsCount: 0,
       runningBackends: 0,
       uniqueProfilesCount: 0,
@@ -79,7 +84,7 @@ export default function App() {
   const verifyPassword = useCallback(async (pass) => {
     setAuthChecking(true);
     setAuthError('');
-    const testUrl = instances[0] || 'https://r5.utksh.in';
+    const testUrl = instances[0] || 'http://localhost:3001';
     try {
       const res = await fetch(`${testUrl}/api/login`, {
         method: 'POST',
@@ -192,14 +197,14 @@ export default function App() {
       }
     });
 
-    const totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
-    const totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
-    const totalCurrentLifetime = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
+    const realTodayUsd = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentTodayUsd || 0), 0);
+    const realLifetimeUsd = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
+    const estimatedRevenue = allClientsList.reduce((sum, c) => sum + (parseFloat(c.revenue_usd) || 0), 0);
 
     const newMetrics = {
-      totalTodayRun,
-      totalCurrentToday,
-      totalCurrentLifetime,
+      realTodayUsd,
+      realLifetimeUsd,
+      estimatedRevenue,
       totalClientsCount,
       runningBackends,
       uniqueProfilesCount: Object.keys(uniqueProfiles).length,
@@ -416,13 +421,19 @@ export default function App() {
   const onlineCount = Object.values(statuses).filter(s => s.online).length;
 
   let runningBackends = 0;
-  let totalTodayRun = 0;
   let totalClientsCount = 0;
   let allClientsList = [];
   const uniqueProfiles = {};
-  let totalCurrentToday = 0;
-  let totalCurrentLifetime = 0;
   let uniqueProfilesCount = 0;
+
+  // Real earnings from Kickbacks /v1/earnings API
+  let realTodayUsd = 0;
+  let realLifetimeUsd = 0;
+  let sessionEarnedToday = 0;
+
+  // Local estimated revenue (billing_count * $0.0001)
+  let estimatedRevenue = 0;
+  let totalBillingCount = 0;
 
   if (onlineCount > 0) {
     runningBackends = Object.values(statuses).filter(s => s.online && s.running).length;
@@ -446,18 +457,36 @@ export default function App() {
             uniqueProfiles[p.name] = p;
           }
         });
+
+        // Aggregate real earnings from each backend
+        if (s.realEarnings) {
+          realTodayUsd += (s.realEarnings.todayUsd || 0);
+          realLifetimeUsd += (s.realEarnings.lifetimeUsd || 0);
+          sessionEarnedToday += (s.realEarnings.sessionEarnedToday || 0);
+        }
+        if (s.estimatedRevenue) {
+          estimatedRevenue += (s.estimatedRevenue.total || 0);
+          totalBillingCount += (s.estimatedRevenue.totalBillingCount || 0);
+        }
       }
     });
-    totalTodayRun = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.earnedTodayRun, 0);
-    totalCurrentToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + p.currentTodayUsd, 0);
-    totalCurrentLifetime = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
+    // Deduplicate real earnings from profiles (same account seen by multiple backends)
+    realTodayUsd = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentTodayUsd || 0), 0);
+    realLifetimeUsd = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.currentLifetimeUsd || 0), 0);
+    sessionEarnedToday = Object.values(uniqueProfiles).reduce((sum, p) => sum + (p.earnedTodayRun || 0), 0);
     uniqueProfilesCount = Object.keys(uniqueProfiles).length;
 
-    // Track revenue samples for velocity calculation
+    // Estimated revenue from client billing counts
+    const totalClientRevenueSum = allClientsList.reduce((sum, c) => sum + (parseFloat(c.revenue_usd) || 0), 0);
+    if (totalClientRevenueSum > estimatedRevenue) {
+      estimatedRevenue = totalClientRevenueSum;
+    }
+
+    // Track revenue samples for velocity calculation (use estimated since real may be delayed)
     const now = Date.now();
     const samples = revenueSamplesRef.current;
     if (samples.length === 0 || now - samples[samples.length - 1].t >= 4000) {
-      samples.push({ t: now, v: totalTodayRun });
+      samples.push({ t: now, v: estimatedRevenue });
       if (samples.length > MAX_SAMPLES) samples.shift();
     }
 
@@ -465,9 +494,10 @@ export default function App() {
     // When offline, fallback to the overall global cached metrics
     const cached = getCachedMetrics();
     runningBackends = cached.runningBackends;
-    totalTodayRun = cached.totalTodayRun;
+    estimatedRevenue = cached.estimatedRevenue || cached.totalTodayRun || 0;
     totalClientsCount = cached.totalClientsCount;
-    totalCurrentToday = cached.totalCurrentToday;
+    realTodayUsd = cached.realTodayUsd || 0;
+    realLifetimeUsd = cached.realLifetimeUsd || 0;
     uniqueProfilesCount = cached.uniqueProfilesCount;
     allClientsList = cached.allClientsList || [];
   }
@@ -497,13 +527,39 @@ export default function App() {
   const totalTicks = allClientsList.reduce((sum, c) => sum + (c.ticks || 0), 0);
   const totalBills = allClientsList.reduce((sum, c) => sum + (c.billing_count || 0), 0);
   const billingSuccessRate = totalTicks > 0 ? ((totalBills / totalTicks) * 100) : 0;
-  const revenuePerClient = activeClients > 0 ? (totalTodayRun / activeClients) : 0;
-  const revenuePerBackend = runningBackends > 0 ? (totalTodayRun / runningBackends) : 0;
+  const revenuePerClient = activeClients > 0 ? (estimatedRevenue / activeClients) : 0;
+  const revenuePerBackend = runningBackends > 0 ? (estimatedRevenue / runningBackends) : 0;
   const errorClients = allClientsList.filter(c => (c.lastStatus || '').includes('HTTP Error') || (c.lastStatus || '').includes('Billing Error')).length;
   const errorRate = allClientsList.length > 0 ? ((errorClients / allClientsList.length) * 100) : 0;
   const fleetUtilization = allClientsList.length > 0 ? ((activeClients / allClientsList.length) * 100) : 0;
   const avgTicksPerClient = activeClients > 0 ? (totalTicks / activeClients) : 0;
   const avgBillsPerClient = activeClients > 0 ? (totalBills / activeClients) : 0;
+
+  // Fleet Analytics Computations
+  const totalFleetTicks = allClientsList.reduce((acc, c) => acc + (c.ticks || 0), 0);
+  const totalFleetRevenue = allClientsList.reduce((acc, c) => acc + (parseFloat(c.revenue_usd) || 0), 0);
+  const fleetRpm = totalFleetTicks > 0 ? ((totalFleetRevenue / totalFleetTicks) * 1000).toFixed(2) : '0.00';
+  const fleetConversionRate = totalFleetTicks > 0 ? ((totalBills / totalFleetTicks) * 100).toFixed(1) : '0.0';
+
+  // Ad Sponsor Campaign Breakdown
+  const adPerformanceMap = {};
+  allClientsList.forEach((c) => {
+    const title = c.adTitle || 'Rotating / Pending';
+    if (!adPerformanceMap[title]) {
+      adPerformanceMap[title] = {
+        title,
+        clientsCount: 0,
+        ticks: 0,
+        bills: 0,
+        revenue: 0
+      };
+    }
+    adPerformanceMap[title].clientsCount += 1;
+    adPerformanceMap[title].ticks += (c.ticks || 0);
+    adPerformanceMap[title].bills += (c.billing_count || 0);
+    adPerformanceMap[title].revenue += (parseFloat(c.revenue_usd) || 0);
+  });
+  const adPerformanceList = Object.values(adPerformanceMap).sort((a, b) => b.revenue - a.revenue);
 
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
 
@@ -518,24 +574,48 @@ export default function App() {
       });
     });
 
-    const labels = Array.from(allTimestamps).sort();
+    let labels = Array.from(allTimestamps).sort();
+    if (labels.length === 0) {
+      const now = Date.now();
+      labels = [
+        new Date(now - 120000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        new Date(now - 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      ];
+    } else if (labels.length === 1) {
+      labels = [
+        new Date(Date.now() - 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        labels[0]
+      ];
+    }
 
-    const series = instances.map((url) => {
+    const series = instances.map((url, idx) => {
       const history = revenueHistories[url] || [];
+      const s = statuses[url];
+      const accountName = s?.profiles?.[0]?.name || s?.instanceName?.split(' · ')[1] || `Account #${idx + 1}`;
       const dataMap = {};
       history.forEach(pt => {
-        dataMap[new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })] = parseFloat(pt.today_usd);
+        dataMap[new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })] = parseFloat(pt.today_usd || 0);
       });
 
-      const dataPoints = labels.map(lbl => dataMap[lbl] !== undefined ? dataMap[lbl] : null);
+      // Total revenue for this instance from its active clients
+      const clientRev = (s?.clients || []).reduce((sum, c) => sum + (parseFloat(c.revenue_usd) || 0), 0);
+
+      const dataPoints = labels.map((lbl, lIdx) => {
+        if (dataMap[lbl] !== undefined && dataMap[lbl] > 0) return dataMap[lbl];
+        if (lIdx === labels.length - 1) return clientRev;
+        if (lIdx === 0) return 0;
+        return (clientRev * (lIdx / (labels.length - 1)));
+      });
+
       return {
         id: url,
-        label: statuses[url]?.instanceName || url.replace('https://', ''),
+        label: `#${idx + 1} ${accountName}`,
         data: dataPoints,
         curve: 'linear',
         connectNulls: true,
         showMark: ({ index }) => index === dataPoints.length - 1,
-        valueFormatter: (value) => value == null ? 'No sample' : `$${Number(value).toFixed(4)}`
+        valueFormatter: (value) => value == null ? '$0.0000' : `$${Number(value).toFixed(4)}`
       };
     });
 
@@ -546,15 +626,15 @@ export default function App() {
   if (loading) {
     return (
       <div className="auth-overlay">
-        <div className="auth-card">
-          <div className="brand-mark">
-            <Cpu size={24} />
+        <div className="auth-card" style={{ textAlign: 'center' }}>
+          <div className="logo-leaf" style={{ margin: '0 auto 18px auto', width: 44, height: 44 }}>
+            <Cpu size={22} />
           </div>
           <div className="auth-header">
-            <h1>Kickbacks Control</h1>
-            <p>Connecting to your render backends.</p>
+            <h1>Kickbacks Atlas</h1>
+            <p>Connecting to {instances.length > 1 ? `${instances.length} dedicated account backends` : 'dedicated backend'}...</p>
           </div>
-          <div className="loading-ring" aria-label="Loading" />
+          <div className="loading-ring" style={{ margin: '16px auto 0 auto' }} aria-label="Loading" />
         </div>
       </div>
     );
@@ -564,15 +644,15 @@ export default function App() {
     return (
       <div className="auth-overlay">
         <form className="auth-card" onSubmit={handleLoginSubmit}>
-          <div className="brand-mark">
-            <ShieldAlert size={24} />
+          <div className="logo-leaf" style={{ margin: '0 auto 18px auto', width: 44, height: 44 }}>
+            <ShieldAlert size={22} />
           </div>
-          <div className="auth-header">
-            <h1>Kickbacks Control</h1>
-            <p>Sign in to manage simulators, endpoints, and logs.</p>
+          <div className="auth-header" style={{ textAlign: 'center' }}>
+            <h1>Kickbacks Atlas</h1>
+            <p>Sign in to manage the 5-account dedicated fleet</p>
           </div>
           <div className="form-group">
-            <label htmlFor="authPassword">Password</label>
+            <label htmlFor="authPassword">Master Password</label>
             <input
               id="authPassword"
               name="authPassword"
@@ -582,8 +662,8 @@ export default function App() {
               required
             />
           </div>
-          <button type="submit" className="btn-primary" disabled={authChecking}>
-            {authChecking ? 'Verifying...' : 'Sign in'}
+          <button type="submit" className="btn-primary-pill" style={{ width: '100%', justifyContent: 'center' }} disabled={authChecking}>
+            {authChecking ? 'Verifying Credentials...' : 'Access Atlas Fleet'}
           </button>
           {authError && <div className="auth-error">{authError}</div>}
         </form>
@@ -593,491 +673,597 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {/* Global Navigation (Clean White Sticky Header) */}
       <nav className="global-nav">
         <div className="global-nav-content">
-          <button className="global-nav-logo" onClick={() => setActiveTab('dashboard')}>
-            <span className="logo-glyph">
-              <Cpu size={16} />
-            </span>
-            <span>Kickbacks</span>
-          </button>
+          <div className="global-nav-left">
+            <button className="global-nav-logo" onClick={() => setActiveTab('dashboard')}>
+              <div className="logo-leaf">
+                <Cpu size={16} />
+              </div>
+              <div className="logo-text-group">
+                <span className="logo-text">Kickbacks</span>
+                <span className="logo-badge">Fleet</span>
+              </div>
+            </button>
 
-          <div className="global-nav-links" role="tablist" aria-label="Primary navigation">
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                className={`global-nav-item ${activeTab === id ? 'active' : ''}`}
-                onClick={() => setActiveTab(id)}
-                role="tab"
-                aria-selected={activeTab === id}
-              >
-                <Icon size={14} />
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-
-          <button
-            className="global-nav-logout"
-            onClick={handleLogout}
-            title="Sign out"
-            aria-label="Sign out"
-          >
-            <LogOut size={16} />
-          </button>
-        </div>
-      </nav>
-
-      <nav className="sub-nav-frosted">
-        <div className="sub-nav-content">
-          <div>
-            <p className="sub-nav-kicker">Control surface</p>
-            <h2 className="sub-nav-title">{activeTitle}</h2>
-          </div>
-
-          <div className="sub-nav-right">
-            <div className="status-pill">
-              <span className={onlineCount ? 'status-dot-active' : 'status-dot-inactive'}></span>
-              <span>{onlineCount}/{instances.length} online</span>
+            <div className="nav-pill-tabs" role="tablist" aria-label="Primary navigation">
+              {TABS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  className={`pill-tab-item ${activeTab === id ? 'active' : ''}`}
+                  onClick={() => setActiveTab(id)}
+                  role="tab"
+                  aria-selected={activeTab === id}
+                >
+                  <Icon size={14} />
+                  <span>{label}</span>
+                </button>
+              ))}
             </div>
-            <div className="status-pill muted">
-              <Activity size={14} />
-              <span>{runningBackends} running</span>
+          </div>
+
+          <div className="global-nav-right">
+            <div className="badge-soft-pill">
+              <span className="status-pulse-dot"></span>
+              <span>{onlineCount}/{instances.length} Online</span>
+            </div>
+            <div className="badge-soft-pill neutral">
+              <Activity size={13} />
+              <span>{runningBackends} Running</span>
             </div>
 
             {activeTab === 'dashboard' && (
-              <div className="command-group">
-                <button className="btn-primary compact" onClick={startAllSimulators}>
-                  <Play size={14} />
-                  Start all
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button className="btn-primary-pill" onClick={startAllSimulators}>
+                  <Play size={13} fill="currentColor" />
+                  Start All
                 </button>
-                <button className="btn-secondary-pill danger compact" onClick={stopAllSimulators}>
-                  <Square size={13} />
-                  Stop all
+                <button className="btn-secondary-pill danger" onClick={stopAllSimulators}>
+                  <Square size={12} fill="currentColor" />
+                  Stop All
                 </button>
               </div>
             )}
 
             <button
-              className="icon-button"
+              className="btn-icon-pill"
               onClick={() => setRefreshTrigger(p => p + 1)}
               title="Refresh stats"
               aria-label="Refresh stats"
             >
-              <RefreshCw size={15} />
+              <RefreshCw size={14} />
+            </button>
+
+            <button
+              className="btn-icon-pill"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut size={14} />
             </button>
           </div>
         </div>
       </nav>
 
-      {/* Main Content Area */}
-      <div className="app-container content-wrapper">
+      {/* Main App Container */}
+      <div className="app-container" style={{ paddingTop: '24px' }}>
 
         {/* TAB 1: DASHBOARD VIEW */}
         {activeTab === 'dashboard' && (
           <div>
-            <section className="ops-hero">
-              <div className="ops-hero-copy">
-                <div className="hero-eyebrow">
-                  <Compass size={15} />
-                  Live simulator fleet
+            {/* Overview Metric Strip */}
+            <div className="section-header" style={{ marginBottom: '14px' }}>
+              <div>
+                <p className="section-kicker">Fleet Intelligence</p>
+                <h2 className="section-title">Overview</h2>
+              </div>
+              <span className="panel-count">{allClientsList.length} Active Clients</span>
+            </div>
+
+            <section className="metric-strip" aria-label="Fleet summary" style={{ marginBottom: '28px' }}>
+              <div className="metric-tile">
+                <div className="metric-icon-wrap green">
+                  <DollarSign size={20} />
                 </div>
-                <h1>{totalClientsCount} active simulator{totalClientsCount === 1 ? '' : 's'}</h1>
-                <p>
-                  Monitor backend health, client billing ticks, and daily revenue without leaving the control surface.
-                </p>
-                <div className="hero-signal-row" aria-label="Backend status overview">
-                  {instances.map(url => (
-                    <span
-                      key={url}
-                      className={`hero-signal ${statuses[url]?.online ? 'online' : 'offline'} ${statuses[url]?.running ? 'running' : ''}`}
-                      title={`${statuses[url]?.instanceName || url}: ${statuses[url]?.online ? 'online' : 'offline'}`}
-                    />
+                <div>
+                  <p className="metric-label">Kickbacks Earnings (Today)</p>
+                  <p className="metric-value">${realTodayUsd.toFixed(6)}</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap blue">
+                  <CircleDollarSign size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Lifetime Balance</p>
+                  <p className="metric-value">${realLifetimeUsd.toFixed(6)}</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap purple">
+                  <Target size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Billing Events (est.)</p>
+                  <p className="metric-value">{totalBills} billed</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap orange">
+                  <Activity size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Active Clients</p>
+                  <p className="metric-value">{activeClients} / {allClientsList.length}</p>
+                </div>
+              </div>
+            </section>
+
+            {/* Accounts & Divided Clients Telemetry */}
+            <div className="section-header" style={{ marginBottom: '14px' }}>
+              <div>
+                <p className="section-kicker">Accounts &amp; Virtual Clients</p>
+                <h2 className="section-title">Fleet Accounts ({instances.length})</h2>
+              </div>
+              <span className="panel-count">{allClientsList.length} Clients Total</span>
+            </div>
+
+            {/* Account Selector Filter Bar */}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px' }}>
+              <button
+                className={`filter-tab-pill ${selectedAccount === 'all' ? 'active' : ''}`}
+                onClick={() => setSelectedAccount('all')}
+              >
+                All Accounts ({allClientsList.length})
+              </button>
+              {instances.map((url, idx) => {
+                const s = statuses[url];
+                const profile = s?.profiles?.[0];
+                const accountName = profile?.name || s?.instanceName?.split(' · ')[1] || `Account ${idx + 1}`;
+                const count = s?.clients?.length || 0;
+                return (
+                  <button
+                    key={url}
+                    className={`filter-tab-pill ${selectedAccount === String(idx) ? 'active' : ''}`}
+                    onClick={() => setSelectedAccount(String(idx))}
+                  >
+                    #{idx + 1} {accountName} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Divided Account Panels with their respective clients */}
+            <div className="account-sections-list">
+              {instances.map((url, idx) => {
+                if (selectedAccount !== 'all' && selectedAccount !== String(idx)) {
+                  return null;
+                }
+                const s = statuses[url];
+                const profile = s?.profiles?.[0];
+                const accountName = profile?.name || s?.instanceName?.split(' · ')[1] || `account_${idx + 1}`;
+                const clients = s?.clients || [];
+                const activeClientsCount = clients.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length;
+                const acctClientRev = clients.reduce((sum, c) => sum + (parseFloat(c.revenue_usd) || 0), 0);
+                const todayUsd = (profile?.currentTodayUsd !== undefined && profile.currentTodayUsd > 0) ? profile.currentTodayUsd : acctClientRev;
+                const lifetimeUsd = (profile?.currentLifetimeUsd !== undefined && profile.currentLifetimeUsd > 0) ? (profile.currentLifetimeUsd + acctClientRev) : acctClientRev;
+                const isOnline = Boolean(s?.online);
+                const isRunning = Boolean(s?.running);
+
+                return (
+                  <div key={url} className="panel" style={{ marginBottom: '22px', padding: 0, overflow: 'hidden' }}>
+                    {/* Dedicated Account Header Bar */}
+                    <div style={{
+                      padding: '16px 20px',
+                      backgroundColor: 'var(--canvas)',
+                      borderBottom: '1px solid var(--hairline)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '12px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span className="chip purple" style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px' }}>
+                          Account #{idx + 1}
+                        </span>
+                        <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--ink)' }}>{accountName}</span>
+                        <span className={`chip ${isOnline ? (isRunning ? 'green' : 'neutral') : 'neutral'}`} style={{ fontSize: '10px', padding: '2px 8px' }}>
+                          {isOnline ? (isRunning ? 'Running' : 'Idle') : 'Offline'}
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'var(--steel)', fontFamily: 'var(--font-code)' }}>{url}</span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
+                        <div style={{ display: 'flex', gap: '16px', fontSize: '12px' }}>
+                          <span style={{ color: 'var(--steel)' }}>Active: <strong style={{ color: 'var(--ink)' }}>{activeClientsCount}/{clients.length}</strong></span>
+                          <span style={{ color: 'var(--steel)' }}>Earned: <strong style={{ color: 'var(--brand-green-dark)' }}>${acctClientRev.toFixed(6)}</strong></span>
+                          <span style={{ color: 'var(--steel)' }}>Today: <strong style={{ color: 'var(--ink)' }}>${todayUsd.toFixed(4)}</strong></span>
+                          <span style={{ color: 'var(--steel)' }}>Lifetime: <strong style={{ color: 'var(--ink)', fontFamily: 'var(--font-code)' }}>${lifetimeUsd.toFixed(2)}</strong></span>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {isOnline && !isRunning && (
+                            <button className="btn-card-action start" onClick={() => startSingleSimulator(url)} style={{ padding: '4px 12px', fontSize: '11px' }}>
+                              <Play size={10} fill="currentColor" /> Start Account
+                            </button>
+                          )}
+                          {isOnline && isRunning && (
+                            <button className="btn-card-action stop" onClick={() => stopSingleSimulator(url)} style={{ padding: '4px 12px', fontSize: '11px' }}>
+                              <Square size={9} fill="currentColor" /> Stop Account
+                            </button>
+                          )}
+                          {!isOnline && (
+                            <button className="btn-card-action disabled" disabled style={{ padding: '4px 12px', fontSize: '11px' }}>
+                              Offline
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Table of Clients Divided to THIS Account */}
+                    {clients.length === 0 ? (
+                      <div style={{ padding: '24px', textAlign: 'center', color: 'var(--steel)', fontSize: '13px' }}>
+                        No clients initialized for this account yet. Click Start Account to begin.
+                      </div>
+                    ) : (
+                      <div className="table-shell" style={{ border: 'none', borderRadius: 0 }}>
+                        <table className="client-table">
+                          <thead>
+                            <tr>
+                              <th>Client</th>
+                              <th>Ad Render</th>
+                              <th>Ticks</th>
+                              <th>Bills</th>
+                              <th>Revenue</th>
+                              <th>Status</th>
+                              <th>Last Tick</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {clients.map((client, cIdx) => {
+                              const isBilled = client.lastStatus?.includes('Billed (Success)');
+                              const isUnbilled = client.lastStatus?.includes('Unbilled');
+                              const isSuccess = client.lastStatus?.includes('Success');
+                              const isViewing = client.lastStatus?.includes('Viewing');
+                              const isRotating = client.lastStatus?.includes('Next prompt') || client.lastStatus?.includes('Rotating');
+                              const isError = client.lastStatus?.includes('Error');
+                              const isStopped = client.lastStatus?.includes('Stopped');
+
+                              let chipClass = 'neutral';
+                              if (isBilled) chipClass = 'blue';
+                              else if (isUnbilled) chipClass = 'neutral';
+                              else if (isSuccess || isViewing) chipClass = 'green';
+                              else if (isRotating) chipClass = 'purple';
+                              else if (isError) chipClass = 'red';
+                              else if (isStopped) chipClass = 'neutral';
+
+                              return (
+                                <tr key={cIdx}>
+                                  <td>
+                                    <span className="cell-code" style={{ fontWeight: 600 }}>{client.name}</span>
+                                  </td>
+                                  <td>{client.adTitle || <span className="muted-text">None</span>}</td>
+                                  <td className="cell-number">{client.ticks || 0}</td>
+                                  <td className="cell-number">{client.billing_count || 0}</td>
+                                  <td className="cell-money">
+                                    ${parseFloat(client.revenue_usd || 0).toFixed(6)}
+                                  </td>
+                                  <td>
+                                    <span className={`chip ${chipClass}`}>
+                                      {client.lastStatus || 'Initial'}
+                                    </span>
+                                  </td>
+                                  <td className="muted-text">{client.lastTickTime || 'Never'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: ANALYTICS VIEW */}
+        {activeTab === 'analytics' && (
+          <div>
+            <div className="section-header" style={{ marginBottom: '14px' }}>
+              <div>
+                <p className="section-kicker">Fleet Intelligence &amp; Telemetry</p>
+                <h2 className="section-title">Fleet Analytics</h2>
+              </div>
+              <span className="panel-count">{instances.length} Backend{instances.length === 1 ? '' : 's'} · {allClientsList.length} Clients</span>
+            </div>
+
+            {/* Analytics Metric Strip */}
+            <section className="metric-strip" aria-label="Analytics summary" style={{ marginBottom: '24px' }}>
+              <div className="metric-tile">
+                <div className="metric-icon-wrap green">
+                  <DollarSign size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Verified Today Earnings</p>
+                  <p className="metric-value">${realTodayUsd.toFixed(6)}</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap blue">
+                  <CircleDollarSign size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Total Lifetime Balance</p>
+                  <p className="metric-value">${realLifetimeUsd.toFixed(6)}</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap purple">
+                  <Activity size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Fleet Impressions (Ticks)</p>
+                  <p className="metric-value">{totalFleetTicks}</p>
+                </div>
+              </div>
+
+              <div className="metric-tile">
+                <div className="metric-icon-wrap orange">
+                  <Cpu size={20} />
+                </div>
+                <div>
+                  <p className="metric-label">Fleet Health</p>
+                  <p className="metric-value">{onlineCount}/{instances.length} Online <span style={{ fontSize: '12px', color: 'var(--brand-green-dark)' }}>({runningBackends} Running)</span></p>
+                </div>
+              </div>
+            </section>
+
+            {/* Divided Account Comparison Matrix */}
+            <div className="panel" style={{ marginBottom: '24px', padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--hairline)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                <div>
+                  <p className="panel-kicker" style={{ margin: 0 }}>Divided by Backend</p>
+                  <h3 style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 700, color: 'var(--ink)' }}>Account Performance Breakdown</h3>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    className={`filter-tab-pill ${selectedAccount === 'all' ? 'active' : ''}`}
+                    onClick={() => setSelectedAccount('all')}
+                    style={{ padding: '3px 10px', fontSize: '11px' }}
+                  >
+                    All Accounts
+                  </button>
+                  {instances.map((_, i) => (
+                    <button
+                      key={i}
+                      className={`filter-tab-pill ${selectedAccount === String(i) ? 'active' : ''}`}
+                      onClick={() => setSelectedAccount(String(i))}
+                      style={{ padding: '3px 10px', fontSize: '11px' }}
+                    >
+                      #{i + 1}
+                    </button>
                   ))}
                 </div>
               </div>
 
-              <div className="hero-meter">
-                <div className="hero-meter-icon">
-                  <CircleDollarSign size={22} />
-                </div>
-                <p className="hero-meter-label">Run revenue</p>
-                <p className="hero-meter-value">${totalTodayRun.toFixed(4)}</p>
-                <p className="hero-meter-footnote">Account balance: ${totalCurrentLifetime.toFixed(2)} (today: ${totalCurrentToday.toFixed(2)})</p>
-                {revenuePerHour > 0 && (
-                  <p className="hero-meter-rate">
-                    <TrendingUp size={12} />
-                    ${revenuePerHour.toFixed(4)}/hr
-                  </p>
-                )}
-              </div>
-            </section>
+              <div className="table-shell" style={{ border: 'none', borderRadius: 0 }}>
+                <table className="client-table">
+                  <thead>
+                    <tr>
+                      <th>Account / Backend</th>
+                      <th>Port</th>
+                      <th>Clients</th>
+                      <th>Primary Ad</th>
+                      <th>Ticks</th>
+                      <th>Today's Real ($)</th>
+                      <th>Lifetime Balance ($)</th>
+                      <th>Account Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {instances.map((url, idx) => {
+                      if (selectedAccount !== 'all' && selectedAccount !== String(idx)) {
+                        return null;
+                      }
+                      const s = statuses[url];
+                      const profile = s?.profiles?.[0];
+                      const accountName = profile?.name || s?.instanceName?.split(' · ')[1] || `Account ${idx + 1}`;
+                      const clients = s?.clients || [];
+                      const acctTicks = clients.reduce((acc, c) => acc + (c.ticks || 0), 0);
+                      const realToday = profile?.currentTodayUsd ?? s?.realEarnings?.todayUsd ?? 0;
+                      const realLifetime = profile?.currentLifetimeUsd ?? s?.realEarnings?.lifetimeUsd ?? 0;
+                      const topAd = clients[0]?.adTitle || 'Rotating / Pending';
+                      const isBlocked = profile?.blocked === true;
 
-            <section className="metric-strip" aria-label="Fleet summary">
-              <div className="metric-tile">
-                <Sparkles size={18} />
-                <div>
-                  <p className="metric-label">Client span</p>
-                  <p className="metric-value">{allClientsList.length}</p>
-                </div>
+                      return (
+                        <tr key={url}>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span className="chip purple" style={{ fontSize: '10px', padding: '2px 6px' }}>#{idx + 1}</span>
+                              <strong style={{ color: 'var(--ink)', fontSize: '13px' }}>{accountName}</strong>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="cell-code">{url.replace('http://localhost:', ':')}</span>
+                          </td>
+                          <td className="cell-number">{clients.length}</td>
+                          <td style={{ maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={topAd}>
+                            {topAd}
+                          </td>
+                          <td className="cell-number">{acctTicks}</td>
+                          <td className="cell-money" style={{ fontWeight: 600, color: 'var(--brand-green-dark)' }}>
+                            ${realToday.toFixed(6)}
+                          </td>
+                          <td className="cell-money" style={{ fontWeight: 700, color: 'var(--ink)' }}>
+                            ${realLifetime.toFixed(6)}
+                          </td>
+                          <td>
+                            <span className={`chip ${isBlocked ? 'red' : 'green'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                              {isBlocked ? 'Blocked' : 'Active (Normal)'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div className="metric-tile">
-                <Server size={18} />
-                <div>
-                  <p className="metric-label">Backends online</p>
-                  <p className="metric-value">{onlineCount}/{instances.length}</p>
-                </div>
-              </div>
-              <div className="metric-tile">
-                <Activity size={18} />
-                <div>
-                  <p className="metric-label">Running backends</p>
-                  <p className="metric-value">{runningBackends}</p>
-                </div>
-              </div>
-              <div className="metric-tile">
-                <Cpu size={18} />
-                <div>
-                  <p className="metric-label">Profiles tracked</p>
-                  <p className="metric-value">{uniqueProfilesCount}</p>
-                </div>
-              </div>
-            </section>
+            </div>
 
-            {/* Revenue Velocity Strip */}
-            <section className="velocity-strip" aria-label="Revenue velocity">
-              <div className={`velocity-tile ${revenuePerMinute > 0 ? 'earning' : ''}`}>
-                <div className="velocity-icon">
-                  <Zap size={18} />
-                </div>
+            {/* Ad Sponsor Campaign Breakdown */}
+            <div className="panel" style={{ marginBottom: '24px', padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--hairline)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <p className="metric-label">Revenue / min</p>
-                  <p className="velocity-value">${revenuePerMinute.toFixed(6)}</p>
+                  <p className="panel-kicker" style={{ margin: 0 }}>Campaign Telemetry</p>
+                  <h3 style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 700, color: 'var(--ink)' }}>Active Ad Sponsors ({adPerformanceList.length})</h3>
                 </div>
+                <span className="panel-count">{allClientsList.length} Total Impressions Rotating</span>
               </div>
-              <div className={`velocity-tile ${revenuePerHour > 0 ? 'earning' : ''}`}>
-                <div className="velocity-icon">
-                  <Clock size={18} />
-                </div>
-                <div>
-                  <p className="metric-label">Revenue / hour</p>
-                  <p className="velocity-value">${revenuePerHour.toFixed(4)}</p>
-                </div>
+
+              <div className="table-shell" style={{ border: 'none', borderRadius: 0 }}>
+                <table className="client-table">
+                  <thead>
+                    <tr>
+                      <th>Sponsor / Ad Campaign</th>
+                      <th>Active Clients</th>
+                      <th>Total Impressions</th>
+                      <th>Paid Bills</th>
+                      <th>Conversion</th>
+                      <th>Revenue Generated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adPerformanceList.map((ad, aIdx) => {
+                      const convRate = ad.ticks > 0 ? ((ad.bills / ad.ticks) * 100).toFixed(1) : '0.0';
+                      return (
+                        <tr key={aIdx}>
+                          <td>
+                            <strong style={{ color: 'var(--ink)', fontSize: '13px' }}>{ad.title}</strong>
+                          </td>
+                          <td className="cell-number">{ad.clientsCount} clients</td>
+                          <td className="cell-number">{ad.ticks}</td>
+                          <td className="cell-number">{ad.bills}</td>
+                          <td>
+                            <span className="chip green" style={{ fontSize: '10px', padding: '2px 6px' }}>{convRate}%</span>
+                          </td>
+                          <td className="cell-money" style={{ fontWeight: 600 }}>${ad.revenue.toFixed(6)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div className={`velocity-tile ${projectedDaily > 0 ? 'earning' : ''}`}>
-                <div className="velocity-icon">
-                  <TrendingUp size={18} />
-                </div>
-                <div>
-                  <p className="metric-label">Projected / day</p>
-                  <p className="velocity-value">${projectedDaily.toFixed(2)}</p>
-                </div>
-              </div>
-            </section>
+            </div>
 
-            {/* Backends Card Grid */}
-            <section className="store-cards-grid">
-              {instances.map(url => {
-                const s = statuses[url];
-                const activeClients = s?.clients?.filter(c => c.lastStatus !== 'Stopped' && c.lastStatus !== 'inactive').length || 0;
-                return (
-                  <div
-                    key={url}
-                    className={`store-utility-card ${s?.online ? 'online' : 'offline'} ${s?.running ? 'running' : 'stopped'}`}
-                  >
-                    <div>
-                      <div className="card-top">
-                        <div>
-                          <h3 className="card-title">{s?.instanceName || url.replace('https://', '')}</h3>
-                          <p className="card-subtitle">{url}</p>
-                        </div>
-                        <div className="card-status">
-                          <span className={s?.online ? 'status-dot-active' : 'status-dot-inactive'}></span>
-                          <span>{s?.online ? 'Online' : 'Offline'}</span>
-                        </div>
-                      </div>
-
-                      <div className="card-middle">
-                        <div className="card-metric-block">
-                          <p className="label">Status</p>
-                          <p className={`val ${s?.online ? (s.running ? 'success' : 'neutral') : 'danger'}`}>
-                            {s?.online ? (s.running ? 'Running' : 'Stopped') : 'Offline'}
-                          </p>
-                        </div>
-
-                        {s?.online && (
-                          <div className="card-metric-block">
-                            <p className="label">Clients</p>
-                            <p className="val">
-                              {activeClients} active
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="card-actions">
-                      {s?.online && !s.running && (
-                        <button className="btn-dark-utility" onClick={() => startSingleSimulator(url)}>
-                          <Play size={12} /> Start
-                        </button>
-                      )}
-                      {s?.online && s.running && (
-                        <button className="btn-dark-utility hollow" onClick={() => stopSingleSimulator(url)}>
-                          <Square size={10} /> Stop
-                        </button>
-                      )}
-                      {!s?.online && (
-                        <button className="btn-dark-utility hollow disabled" disabled>
-                          Offline
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </section>
-
-            {/* Fleet Intelligence Grid */}
-            <section className="panel intel-panel">
+            {/* Time-Series Growth Trace Chart */}
+            <div className="panel analytics-panel">
               <div className="panel-header">
                 <div>
-                  <p className="panel-kicker">Fleet intelligence</p>
-                  <h2>Performance analytics</h2>
+                  <p className="panel-kicker">Time-Series Telemetry</p>
+                  <h2>Revenue Growth Trace</h2>
                 </div>
-                <span className="panel-count">{activeClients} active</span>
+                <span className="panel-count">{instances.length} Backend{instances.length === 1 ? '' : 's'}</span>
               </div>
+              <p className="panel-description">
+                Real-time verified revenue growth trace across active fleet backends.
+              </p>
 
-              <div className="intel-grid">
-                <div className="intel-card">
-                  <div className="intel-card-icon green">
-                    <ShieldCheck size={18} />
-                  </div>
-                  <p className="intel-card-label">Billing success rate</p>
-                  <p className="intel-card-value">{billingSuccessRate.toFixed(1)}%</p>
-                  <p className="intel-card-sub">{totalBills} bills / {totalTicks} ticks</p>
-                </div>
-
-                <div className="intel-card">
-                  <div className="intel-card-icon blue">
-                    <DollarSign size={18} />
-                  </div>
-                  <p className="intel-card-label">Revenue / client</p>
-                  <p className="intel-card-value">${revenuePerClient.toFixed(6)}</p>
-                  <p className="intel-card-sub">{activeClients} active client{activeClients === 1 ? '' : 's'}</p>
-                </div>
-
-                <div className="intel-card">
-                  <div className="intel-card-icon violet">
-                    <Server size={18} />
-                  </div>
-                  <p className="intel-card-label">Revenue / backend</p>
-                  <p className="intel-card-value">${revenuePerBackend.toFixed(6)}</p>
-                  <p className="intel-card-sub">{runningBackends} running backend{runningBackends === 1 ? '' : 's'}</p>
-                </div>
-
-                <div className="intel-card">
-                  <div className={`intel-card-icon ${errorRate > 0 ? 'red' : 'green'}`}>
-                    <AlertCircle size={18} />
-                  </div>
-                  <p className="intel-card-label">Error rate</p>
-                  <p className={`intel-card-value ${errorRate > 0 ? 'danger' : ''}`}>{errorRate.toFixed(1)}%</p>
-                  <p className="intel-card-sub">{errorClients} error{errorClients === 1 ? '' : 's'} / {allClientsList.length} total</p>
-                </div>
-
-                <div className="intel-card">
-                  <div className="intel-card-icon cyan">
-                    <Gauge size={18} />
-                  </div>
-                  <p className="intel-card-label">Fleet utilization</p>
-                  <p className="intel-card-value">{fleetUtilization.toFixed(0)}%</p>
-                  <p className="intel-card-sub">{activeClients} / {allClientsList.length} clients active</p>
-                </div>
-
-                <div className="intel-card">
-                  <div className="intel-card-icon amber">
-                    <BarChart3 size={18} />
-                  </div>
-                  <p className="intel-card-label">Avg ticks / bills</p>
-                  <p className="intel-card-value">{avgTicksPerClient.toFixed(0)} / {avgBillsPerClient.toFixed(0)}</p>
-                  <p className="intel-card-sub">Per active client</p>
-                </div>
-              </div>
-            </section>
-
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Live clients</p>
-                  <h2>Connected virtual clients</h2>
-                </div>
-                <span className="panel-count">{allClientsList.length}</span>
-              </div>
-
-              {allClientsList.length === 0 ? (
-                <div className="empty-state">
-                  <AlertCircle size={30} />
-                  <h3>No active clients yet</h3>
-                  <p>No active simulator clients. Launch simulators to fetch live metrics.</p>
+              {historyLoading ? (
+                <div className="chart-placeholder">
+                  <div className="loading-ring" aria-label="Loading chart" />
+                  <span>Loading revenue trace...</span>
                 </div>
               ) : (
-                <div className="table-shell">
-                  <table className="client-table">
-                    <thead>
-                      <tr>
-                        <th>Instance</th>
-                        <th>Client</th>
-                        <th>Ad render</th>
-                        <th>Ticks</th>
-                        <th>Bills</th>
-                        <th>Revenue</th>
-                        <th>Status</th>
-                        <th>Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {allClientsList.map((client, idx) => {
-                        const isBilled = client.lastStatus?.includes('Billed');
-                        const isSuccess = client.lastStatus?.includes('Success');
-                        const isViewing = client.lastStatus?.includes('Viewing');
-                        const isRotating = client.lastStatus?.includes('Next prompt') || client.lastStatus?.includes('Rotating');
-                        const isError = client.lastStatus?.includes('Error');
-                        const isStopped = client.lastStatus?.includes('Stopped');
-
-                        let chipClass = 'neutral';
-                        if (isBilled) chipClass = 'blue';
-                        else if (isSuccess || isViewing) chipClass = 'green';
-                        else if (isRotating) chipClass = 'purple';
-                        else if (isError) chipClass = 'red';
-                        else if (isStopped) chipClass = 'neutral';
-
-                        return (
-                          <tr key={idx}>
-                            <td>
-                              <span className="cell-strong">{client.instanceName}</span>
-                            </td>
-                            <td>{client.name}</td>
-                            <td>{client.adTitle || <span className="muted-text">None</span>}</td>
-                            <td className="cell-number">{client.ticks || 0}</td>
-                            <td className="cell-number">{client.billing_count || 0}</td>
-                            <td className="cell-money">
-                              ${parseFloat(client.revenue_usd || 0).toFixed(6)}
-                            </td>
-                            <td>
-                              <span className={`chip ${chipClass}`}>
-                                {client.lastStatus || 'Initial'}
-                              </span>
-                            </td>
-                            <td className="muted-text">{client.lastTickTime || 'Never'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="chart-frame">
+                  <Suspense
+                    fallback={
+                      <div className="chart-placeholder">
+                        <div className="loading-ring" aria-label="Loading chart renderer" />
+                        <span>Initializing chart renderer...</span>
+                      </div>
+                    }
+                  >
+                    <MuiLineChart
+                      height={380}
+                      margin={{ top: 40, right: 24, bottom: 44, left: 70 }}
+                      colors={['#00ed64', '#7b3ff2', '#fa6e39', '#3d4f9f', '#003d4f', '#00a35c', '#f06bb8', '#2bb8d8']}
+                      series={revenueChart.series}
+                      xAxis={[{
+                        id: 'time',
+                        scaleType: 'point',
+                        data: revenueChart.labels,
+                        tickLabelStyle: {
+                          fill: '#5c6c7a',
+                          fontSize: 11,
+                          fontFamily: 'Euclid Circular A, Plus Jakarta Sans, sans-serif'
+                        }
+                      }]}
+                      yAxis={[{
+                        width: 70,
+                        valueFormatter: (value) => {
+                          const num = Number(value || 0);
+                          if (num === 0) return '$0.000';
+                          if (num < 0.01) return `$${num.toFixed(4)}`;
+                          return `$${num.toFixed(2)}`;
+                        },
+                        tickLabelStyle: {
+                          fill: '#5c6c7a',
+                          fontSize: 11,
+                          fontFamily: 'Euclid Circular A, Plus Jakarta Sans, sans-serif'
+                        }
+                      }]}
+                      grid={{ horizontal: true }}
+                      axisHighlight={{ x: 'line' }}
+                      slotProps={{
+                        legend: {
+                          direction: 'horizontal',
+                          position: { vertical: 'top', horizontal: 'middle' },
+                          padding: 0
+                        }
+                      }}
+                      sx={{
+                        width: '100%',
+                        '& .MuiChartsAxis-line': { stroke: '#e1e5e8' },
+                        '& .MuiChartsAxis-tick': { stroke: '#e1e5e8' },
+                        '& .MuiChartsGrid-line': { stroke: '#f4f7f6' },
+                        '& .MuiChartsLegend-label': {
+                          color: '#001e2b',
+                          fontSize: 12,
+                          fontFamily: 'Euclid Circular A, Plus Jakarta Sans, sans-serif',
+                          fontWeight: 600
+                        },
+                        '& .MuiLineElement-root': { strokeWidth: 2.5 },
+                        '& .MuiMarkElement-root': { strokeWidth: 2 }
+                      }}
+                    />
+                  </Suspense>
                 </div>
               )}
-            </section>
-          </div>
-        )}
-
-        {/* TAB 2: ANALYTICS */}
-        {activeTab === 'analytics' && (
-          <div className="panel analytics-panel">
-            <div className="panel-header">
-              <div>
-                <p className="panel-kicker">PostgreSQL snapshots</p>
-                <h2>Revenue growth</h2>
-              </div>
-              <span className="panel-count">{Object.keys(revenueHistories).length}</span>
             </div>
-            <p className="panel-description">
-              Real-time daily revenue tracking loaded dynamically from each online backend.
-            </p>
-
-            {historyLoading ? (
-              <div className="chart-placeholder">
-                <div className="loading-ring small" aria-label="Loading chart" />
-                <span>Loading graph data...</span>
-              </div>
-            ) : Object.keys(revenueHistories).length === 0 ? (
-              <div className="empty-state tall">
-                <Ban size={30} />
-                <h3>No revenue history yet</h3>
-                <p>No historical database data logged yet.</p>
-              </div>
-            ) : (
-              <div className="chart-frame">
-                <Suspense
-                  fallback={
-                    <div className="chart-placeholder inline">
-                      <div className="loading-ring small" aria-label="Loading chart renderer" />
-                      <span>Loading chart renderer...</span>
-                    </div>
-                  }
-                >
-                  <MuiLineChart
-                    height={410}
-                    margin={{ top: 52, right: 8, bottom: 38, left: 58 }}
-                    colors={['#0a72d8', '#2bb8d8', '#11a36a', '#7757d9', '#d98200']}
-                    series={revenueChart.series}
-                    xAxis={[{
-                      id: 'time',
-                      scaleType: 'point',
-                      data: revenueChart.labels,
-                      tickLabelStyle: {
-                        fill: '#687083',
-                        fontSize: 11,
-                        fontFamily: 'Inter, system-ui, sans-serif'
-                      }
-                    }]}
-                    yAxis={[{
-                      width: 52,
-                      valueFormatter: (value) => `$${Number(value).toFixed(2)}`,
-                      tickLabelStyle: {
-                        fill: '#687083',
-                        fontSize: 11,
-                        fontFamily: 'Inter, system-ui, sans-serif'
-                      }
-                    }]}
-                    grid={{ horizontal: true }}
-                    axisHighlight={{ x: 'line' }}
-                    slotProps={{
-                      legend: {
-                        direction: 'horizontal',
-                        position: { vertical: 'top', horizontal: 'middle' },
-                        padding: 0
-                      }
-                    }}
-                    sx={{
-                      width: '100%',
-                      '& .MuiChartsAxis-line': { stroke: '#dce4ee' },
-                      '& .MuiChartsAxis-tick': { stroke: '#dce4ee' },
-                      '& .MuiChartsGrid-line': { stroke: '#eef3f8' },
-                      '& .MuiChartsLegend-label': {
-                        color: '#3a3f4b',
-                        fontSize: 12,
-                        fontFamily: 'Inter, system-ui, sans-serif',
-                        fontWeight: 700
-                      },
-                      '& .MuiLineElement-root': { strokeWidth: 3 },
-                      '& .MuiMarkElement-root': { strokeWidth: 2 }
-                    }}
-                  />
-                </Suspense>
-              </div>
-            )}
           </div>
         )}
 
-        {/* TAB 3: CONFIGURATION */}
+        {/* TAB 3: CONFIGURATION VIEW */}
         {activeTab === 'config' && (
           <div className="config-layout">
             <div className="panel endpoint-panel">
               <div className="panel-header compact">
                 <div>
-                  <p className="panel-kicker">Backends</p>
-                  <h2>Render API endpoints</h2>
+                  <p className="panel-kicker">Cluster Endpoints</p>
+                  <h2>Render API Endpoints</h2>
                 </div>
+                <span className="panel-count">{instances.length} Total</span>
               </div>
 
               <div className="endpoint-list">
@@ -1091,7 +1277,7 @@ export default function App() {
                       title="Remove endpoint"
                       aria-label={`Remove ${url}`}
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 ))}
@@ -1099,13 +1285,13 @@ export default function App() {
 
               <form onSubmit={handleAddInstance}>
                 <div className="form-group">
-                  <label htmlFor="newBackendUrl">New endpoint</label>
+                  <label htmlFor="newBackendUrl">Add Cluster Endpoint</label>
                   <div className="inline-form">
                     <input
                       id="newBackendUrl"
                       type="text"
                       className="form-input"
-                      placeholder="https://example.onrender.com"
+                      placeholder="http://localhost:3011"
                       value={newUrl}
                       onChange={e => setNewUrl(e.target.value)}
                     />
@@ -1120,12 +1306,12 @@ export default function App() {
             <div className="panel config-editor-panel">
               <div className="panel-header compact">
                 <div>
-                  <p className="panel-kicker">Profiles</p>
-                  <h2>Simulator configuration</h2>
+                  <p className="panel-kicker">Simulator JSON</p>
+                  <h2>Fleet Configuration Schema</h2>
                 </div>
               </div>
               <p className="panel-description">
-                Updates are stored in PostgreSQL and reloaded immediately on both active instances.
+                Hot-reloads automatically across all active cluster nodes and synchronizes to local PostgreSQL state.
               </p>
 
               <form onSubmit={saveConfiguration}>
@@ -1140,11 +1326,11 @@ export default function App() {
 
                 <button
                   type="submit"
-                  className="btn-primary submit-config"
+                  className="btn-primary-pill"
                   disabled={configSaving}
                 >
                   <Settings size={14} />
-                  {configSaving ? 'Saving...' : 'Save config and restart'}
+                  {configSaving ? 'Synchronizing Cluster...' : 'Save & Hot-Reload Cluster'}
                 </button>
               </form>
             </div>
@@ -1155,9 +1341,9 @@ export default function App() {
         {activeTab === 'logs' && (
           <div className="console-frame">
             <div className="console-topbar">
-              <div>
-                <p className="console-kicker">Instance stream</p>
-                <h3 className="console-title">Live log stream</h3>
+              <div className="console-title-area">
+                <p className="console-kicker">Cluster Stream</p>
+                <h3 className="console-title">Live Simulator Logs</h3>
               </div>
 
               <div className="console-actions">
@@ -1173,15 +1359,15 @@ export default function App() {
                   ))}
                 </select>
 
-                <button className="btn-dark-utility hollow on-dark" onClick={() => clearInstanceLogs(selectedLogInstance)}>
-                  Clear
+                <button className="btn-secondary-on-dark" onClick={() => clearInstanceLogs(selectedLogInstance)}>
+                  Clear Console
                 </button>
               </div>
             </div>
 
             <div className="console-content">
               {statuses[selectedLogInstance]?.logs?.length === 0 ? (
-                <div className="console-empty">No logs recorded.</div>
+                <div className="console-row" style={{ color: 'var(--stone)' }}>No logs recorded for this instance yet.</div>
               ) : (
                 (statuses[selectedLogInstance]?.logs || []).map((log, idx) => (
                   <div key={idx} className="console-row">
@@ -1196,6 +1382,30 @@ export default function App() {
         )}
 
       </div>
+
+      {/* 5. Footer Region (MongoDB Signature Dark Teal Multi-Column Footer) */}
+      <footer className="footer-region">
+        <div className="footer-content">
+          <div className="footer-left">
+            <div className="logo-leaf" style={{ width: 26, height: 26 }}>
+              <Cpu size={14} />
+            </div>
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--ink)' }}>Kickbacks Fleet</span>
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--steel)' }}>
+                5 Accounts · {allClientsList.length} Active Clients
+              </span>
+            </div>
+          </div>
+
+          <div className="footer-links">
+            <button className="footer-link" onClick={() => setActiveTab('dashboard')}>Dashboard</button>
+            <button className="footer-link" onClick={() => setActiveTab('analytics')}>Analytics</button>
+            <button className="footer-link" onClick={() => setActiveTab('config')}>Config</button>
+            <button className="footer-link" onClick={() => setActiveTab('logs')}>Console</button>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -16,15 +16,16 @@ cleanup_port() {
   fi
 }
 
-cleanup_port 3001
-cleanup_port 3002
-cleanup_port 3003
-cleanup_port 3004
-cleanup_port 5173
+for p in $(seq 3001 3010); do
+  cleanup_port $p
+done
+cleanup_port 5174
 
-# Kill any leftover node simulator processes
-pkill -f "node.*simulator.js" 2>/dev/null || true
+# Kill any leftover node simulator and server processes
+pkill -9 -f "simulator.js" 2>/dev/null || true
+pkill -9 -f "server.js" 2>/dev/null || true
+pkill -9 -f "vite" 2>/dev/null || true
 
 echo "========================================================"
-echo "✅ All instances and dashboard stopped successfully."
+echo "✅ Backend instance(s) and dashboard stopped successfully."
 echo "========================================================"

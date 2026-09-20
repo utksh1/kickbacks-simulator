@@ -71,6 +71,15 @@ async function loadConfig() {
         );
       `);
 
+      // Revenue attribution deduplication table
+      await runPgQuery(`
+        CREATE TABLE IF NOT EXISTS revenue_attribution (
+          profile_name VARCHAR(100) PRIMARY KEY,
+          last_distributed_lifetime_micros BIGINT DEFAULT 0,
+          last_distributed_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
       await runPgQuery('ALTER TABLE revenue_history ADD COLUMN IF NOT EXISTS instance_name VARCHAR(50) DEFAULT \'default\';');
       
       const res = await runPgQuery('SELECT data FROM kickbacks_config WHERE id = $1;', ['default']);
@@ -177,11 +186,15 @@ async function saveRevenueHistory(profileName, todayUsd, lifetimeUsd) {
       console.error("SYSTEM: Render PostgreSQL saveRevenueHistory error:", err.message);
     }
   } else {
+    const clientRevenueSum = Object.values(localClientStats).reduce((acc, c) => acc + (parseFloat(c.revenue_usd) || 0), 0);
+    const effectiveToday = clientRevenueSum > 0 ? clientRevenueSum : (parseFloat(todayUsd) || 0);
+    const effectiveLifetime = (parseFloat(lifetimeUsd) || 0) + clientRevenueSum;
+
     localRevenueHistory.push({
       timestamp: new Date().toISOString(),
       profile_name: profileName,
-      today_usd: todayUsd,
-      lifetime_usd: lifetimeUsd
+      today_usd: effectiveToday,
+      lifetime_usd: effectiveLifetime
     });
     if (localRevenueHistory.length > 200) localRevenueHistory.shift();
   }
@@ -203,6 +216,43 @@ async function getRevenueHistory(limitHours = 24) {
       return [];
     }
   }
+
+  const clientRevenueSum = Object.values(localClientStats).reduce((acc, c) => acc + (parseFloat(c.revenue_usd) || 0), 0);
+  if (localRevenueHistory.length === 0) {
+    const now = Date.now();
+    return [
+      {
+        timestamp: new Date(now - 5 * 60 * 1000).toISOString(),
+        profile_name: INSTANCE_NAME,
+        today_usd: 0,
+        lifetime_usd: 0
+      },
+      {
+        timestamp: new Date().toISOString(),
+        profile_name: INSTANCE_NAME,
+        today_usd: clientRevenueSum,
+        lifetime_usd: clientRevenueSum
+      }
+    ];
+  } else if (localRevenueHistory.length === 1) {
+    const pt = localRevenueHistory[0];
+    return [
+      {
+        timestamp: new Date(new Date(pt.timestamp).getTime() - 5 * 60 * 1000).toISOString(),
+        profile_name: pt.profile_name,
+        today_usd: 0,
+        lifetime_usd: pt.lifetime_usd
+      },
+      pt,
+      {
+        timestamp: new Date().toISOString(),
+        profile_name: pt.profile_name,
+        today_usd: clientRevenueSum > pt.today_usd ? clientRevenueSum : pt.today_usd,
+        lifetime_usd: clientRevenueSum > pt.today_usd ? clientRevenueSum : pt.lifetime_usd
+      }
+    ];
+  }
+
   return localRevenueHistory;
 }
 
@@ -333,19 +383,22 @@ async function updateClientAd(clientName, instanceName, clientId, adId, adTitle,
   }
 }
 
-async function updateClientBilling(clientName, status, isSuccess) {
+async function updateClientBilling(clientName, instanceName, status, isSuccess, billRevenue = 0.0001) {
   if (process.env.DATABASE_URL) {
     try {
       const incrementBilling = isSuccess ? 1 : 0;
+      const revToAdd = isSuccess ? billRevenue : 0;
       const query = `
-        INSERT INTO client_stats (client_name, billing_count, last_status, updated_at)
-        VALUES ($1, $2, $3, NOW())
+        INSERT INTO client_stats (client_name, instance_name, billing_count, revenue_usd, last_status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
         ON CONFLICT (client_name) DO UPDATE SET
-          billing_count = client_stats.billing_count + $2,
+          instance_name = COALESCE(client_stats.instance_name, EXCLUDED.instance_name),
+          billing_count = client_stats.billing_count + $3,
+          revenue_usd = client_stats.revenue_usd + $4,
           last_status = EXCLUDED.last_status,
           updated_at = NOW();
       `;
-      await runPgQuery(query, [clientName, incrementBilling, status]);
+      await runPgQuery(query, [clientName, instanceName, incrementBilling, revToAdd, status]);
     } catch (err) {
       console.error("SYSTEM: updateClientBilling DB error:", err.message);
     }
@@ -353,6 +406,7 @@ async function updateClientBilling(clientName, status, isSuccess) {
     if (localClientStats[clientName]) {
       if (isSuccess) {
         localClientStats[clientName].billing_count = (localClientStats[clientName].billing_count || 0) + 1;
+        localClientStats[clientName].revenue_usd = (localClientStats[clientName].revenue_usd || 0) + billRevenue;
       }
       localClientStats[clientName].last_status = status;
       localClientStats[clientName].updated_at = new Date().toISOString();
@@ -387,6 +441,41 @@ async function distributeClientRevenue(clientNames, amountUsd) {
   }
 }
 
+// Revenue attribution deduplication helpers
+async function getLastDistributedMicros(profileName) {
+  if (process.env.DATABASE_URL) {
+    try {
+      const res = await runPgQuery(
+        'SELECT last_distributed_lifetime_micros FROM revenue_attribution WHERE profile_name = $1;',
+        [profileName]
+      );
+      if (res.rows && res.rows.length > 0) {
+        return parseInt(res.rows[0].last_distributed_lifetime_micros, 10) || 0;
+      }
+    } catch (err) {
+      console.error("SYSTEM: getLastDistributedMicros error:", err.message);
+    }
+  }
+  return 0;
+}
+
+async function setLastDistributedMicros(profileName, micros) {
+  if (process.env.DATABASE_URL) {
+    try {
+      await runPgQuery(
+        `INSERT INTO revenue_attribution (profile_name, last_distributed_lifetime_micros, last_distributed_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (profile_name) DO UPDATE SET
+           last_distributed_lifetime_micros = EXCLUDED.last_distributed_lifetime_micros,
+           last_distributed_at = NOW();`,
+        [profileName, micros]
+      );
+    } catch (err) {
+      console.error("SYSTEM: setLastDistributedMicros error:", err.message);
+    }
+  }
+}
+
 module.exports = { 
   loadConfig, 
   saveConfig, 
@@ -399,5 +488,7 @@ module.exports = {
   distributeClientRevenue,
   clearLocalClientStats,
   runPgQuery,
-  getPgClient
+  getPgClient,
+  getLastDistributedMicros,
+  setLastDistributedMicros
 };

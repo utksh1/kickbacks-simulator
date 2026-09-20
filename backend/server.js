@@ -12,11 +12,13 @@ const {
   updateClientAd,
   updateClientBilling,
   distributeClientRevenue,
-  clearLocalClientStats
+  clearLocalClientStats,
+  getLastDistributedMicros,
+  setLastDistributedMicros
 } = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'Ankitsin';
 
 // OpenAPI 3.0 Document Specification
@@ -174,6 +176,7 @@ let simulatorProcess = null;
 let logs = [];
 let profiles = {};
 let billedClients = []; // In-memory queue to attribute actual revenue
+const IS_ATTRIBUTION_INSTANCE = (process.env.INSTANCE_NAME || 'instance_1') === 'instance_1';
 
 function appendLog(message) {
   const logLine = {
@@ -205,7 +208,7 @@ function startSimulator() {
     appendLog(`ERROR: ${line}`);
   });
 
-  simulatorProcess.on('message', (msg) => {
+  simulatorProcess.on('message', async (msg) => {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.type === 'earnings') {
@@ -214,15 +217,18 @@ function startSimulator() {
       const lastTodayMicros = profiles[profileName]?.currentTodayMicros;
       const lastLifetimeMicros = profiles[profileName]?.currentLifetimeMicros;
 
+      const currentTodayUsdCalc = (todayMicros || 0) / 1000000;
+      const currentLifetimeUsdCalc = (lifetimeMicros || 0) / 1000000;
+
       if (!profiles[profileName]) {
         profiles[profileName] = {
           name: profileName,
-          initialTodayUsd: todayUsd,
-          initialLifetimeUsd: lifetimeUsd,
+          initialTodayUsd: currentTodayUsdCalc,
+          initialLifetimeUsd: currentLifetimeUsdCalc,
           initialTodayMicros: todayMicros,
           initialLifetimeMicros: lifetimeMicros,
-          currentTodayUsd: todayUsd,
-          currentLifetimeUsd: lifetimeUsd,
+          currentTodayUsd: currentTodayUsdCalc,
+          currentLifetimeUsd: currentLifetimeUsdCalc,
           currentTodayMicros: todayMicros,
           currentLifetimeMicros: lifetimeMicros,
           blocked,
@@ -231,8 +237,8 @@ function startSimulator() {
         };
       } else {
         const prof = profiles[profileName];
-        prof.currentTodayUsd = todayUsd;
-        prof.currentLifetimeUsd = lifetimeUsd;
+        prof.currentTodayUsd = currentTodayUsdCalc;
+        prof.currentLifetimeUsd = currentLifetimeUsdCalc;
         prof.currentTodayMicros = todayMicros;
         prof.currentLifetimeMicros = lifetimeMicros;
         prof.blocked = blocked;
@@ -241,38 +247,11 @@ function startSimulator() {
         prof.earnedLifetimeRun = Math.max(0, (lifetimeMicros - prof.initialLifetimeMicros) / 1000000);
       }
 
-      // Attribute actual revenue diff to clients with micro-dollar precision
-      const microsDiff = (lastLifetimeMicros !== undefined && lifetimeMicros > lastLifetimeMicros)
-        ? (lifetimeMicros - lastLifetimeMicros)
-        : ((lastTodayMicros !== undefined && todayMicros > lastTodayMicros) ? (todayMicros - lastTodayMicros) : 0);
-
-      if (microsDiff > 0) {
-        const diff = microsDiff / 1000000;
-        if (billedClients.length > 0) {
-          distributeClientRevenue(billedClients, diff).catch(err => {
-            console.error("SYSTEM: Error distributing revenue to billed clients:", err.message);
-          });
-          billedClients = [];
-        } else {
-          // Fallback: distribute to all active clients of this instance
-          getClientStats(process.env.INSTANCE_NAME || 'default').then(dbClients => {
-            const activeNames = dbClients
-              .filter(c => c.instance_name === (process.env.INSTANCE_NAME || 'default') && c.last_status !== 'Stopped')
-              .map(c => c.client_name);
-            if (activeNames.length > 0) {
-              distributeClientRevenue(activeNames, diff).catch(err => {
-                console.error("SYSTEM: Error distributing revenue to fallback active clients:", err.message);
-              });
-            }
-          });
-        }
-      }
-
       const nowTime = Date.now();
       const prof = profiles[profileName];
-      if (prof && (!prof.lastLoggedDbTime || (nowTime - prof.lastLoggedDbTime >= 15 * 60 * 1000))) {
+      if (prof && (!prof.lastLoggedDbTime || (nowTime - prof.lastLoggedDbTime >= 60 * 1000))) {
         prof.lastLoggedDbTime = nowTime;
-        saveRevenueHistory(profileName, todayUsd, lifetimeUsd).catch(err => {
+        saveRevenueHistory(profileName, currentTodayUsdCalc, currentLifetimeUsdCalc).catch(err => {
           console.error("SYSTEM: Error logging revenue history snapshot:", err.message);
         });
       }
@@ -296,15 +275,27 @@ function startSimulator() {
         console.error("SYSTEM: Error updating client tick in DB:", err.message);
       });
     } else if (msg.type === 'client_billing') {
-      const { clientName, status } = msg;
-      const isSuccess = (status === 200 || status === 204);
-      const statusStr = isSuccess ? 'Billed (Success)' : `Billing Error (${status})`;
+      const { clientName, status, billed, measurement } = msg;
+      const isHttpSuccess = (status === 200 || status === 204);
+      const isActuallyBilled = Boolean(billed && isHttpSuccess);
+      const statusStr = isActuallyBilled 
+        ? 'Billed (Confirmed)'
+        : (isHttpSuccess ? 'Measured (Accepted)' : `Billing Error (${status})`);
+      const instanceName = process.env.INSTANCE_NAME || 'default';
       
-      updateClientBilling(clientName, statusStr, isSuccess).catch(err => {
+      updateClientBilling(clientName, instanceName, statusStr, isActuallyBilled, 0).catch(err => {
         console.error("SYSTEM: Error updating client billing in DB:", err.message);
       });
 
-      if (isSuccess) {
+      const nowTime = Date.now();
+      const profName = Object.keys(profiles)[0] || process.env.INSTANCE_NAME || 'default';
+      const prof = profiles[profName];
+      if (prof && (!prof.lastLoggedDbTime || (nowTime - prof.lastLoggedDbTime >= 60 * 1000))) {
+        prof.lastLoggedDbTime = nowTime;
+        saveRevenueHistory(profName, prof.currentTodayUsd || 0, prof.currentLifetimeUsd || 0).catch(() => {});
+      }
+
+      if (isActuallyBilled) {
         if (!billedClients.includes(clientName)) {
           billedClients.push(clientName);
         }
@@ -423,23 +414,54 @@ app.get('/api/status', checkAuth, async (req, res) => {
   }
 
   // Aggregate totals
-  let totalEarnedTodayRun = 0;
-  let totalEarnedLifetimeRun = 0;
-  let totalCurrentToday = 0;
-  let totalCurrentLifetime = 0;
+  const clientRevenueTotal = dbClients.reduce((sum, c) => sum + (parseFloat(c.revenue_usd) || 0), 0);
+  const totalBillingCount = dbClients.reduce((sum, c) => sum + (parseInt(c.billing_count) || 0), 0);
 
-  Object.values(profiles).forEach(p => {
-    totalEarnedTodayRun += p.earnedTodayRun;
-    totalEarnedLifetimeRun += p.earnedLifetimeRun;
-    totalCurrentToday += p.currentTodayUsd;
-    totalCurrentLifetime += p.currentLifetimeUsd;
+  // Real earnings from Kickbacks /v1/earnings API (the OFFICIAL numbers)
+  let realTodayUsd = 0;
+  let realLifetimeUsd = 0;
+  let realTodayMicros = 0;
+  let realLifetimeMicros = 0;
+
+  // Session-earned delta (real earnings gained since this run started)
+  let sessionEarnedToday = 0;
+  let sessionEarnedLifetime = 0;
+
+  const enhancedProfiles = Object.values(profiles).map(p => {
+    realTodayUsd += (p.currentTodayUsd || 0);
+    realLifetimeUsd += (p.currentLifetimeUsd || 0);
+    realTodayMicros += (p.currentTodayMicros || 0);
+    realLifetimeMicros += (p.currentLifetimeMicros || 0);
+    sessionEarnedToday += (p.earnedTodayRun || 0);
+    sessionEarnedLifetime += (p.earnedLifetimeRun || 0);
+    return {
+      ...p,
+      // Keep real values, don't inflate with fake estimates
+      earnedTodayRun: p.earnedTodayRun || 0,
+      currentTodayUsd: p.currentTodayUsd || 0,
+      currentLifetimeUsd: p.currentLifetimeUsd || 0
+    };
   });
 
   res.json({
     running: simulatorProcess !== null,
     instanceName: process.env.INSTANCE_NAME || 'default',
     configProfiles,
-    profiles: Object.values(profiles),
+    profiles: enhancedProfiles,
+    // Real earnings from Kickbacks official API
+    realEarnings: {
+      todayUsd: realTodayUsd,
+      lifetimeUsd: realLifetimeUsd,
+      todayMicros: realTodayMicros,
+      lifetimeMicros: realLifetimeMicros,
+      sessionEarnedToday,
+      sessionEarnedLifetime
+    },
+    // Local estimated revenue (billing_count * $0.0001 — NOT real money)
+    estimatedRevenue: {
+      total: clientRevenueTotal,
+      totalBillingCount
+    },
     clients: dbClients.map(c => ({
       name: c.client_name,
       instanceName: c.instance_name,
@@ -454,10 +476,12 @@ app.get('/api/status', checkAuth, async (req, res) => {
       updatedAt: c.updated_at
     })),
     totals: {
-      earnedTodayRun: totalEarnedTodayRun.toFixed(6),
-      earnedLifetimeRun: totalEarnedLifetimeRun.toFixed(6),
-      currentToday: totalCurrentToday.toFixed(2),
-      currentLifetime: totalCurrentLifetime.toFixed(2)
+      realTodayUsd: realTodayUsd.toFixed(6),
+      realLifetimeUsd: realLifetimeUsd.toFixed(6),
+      sessionEarnedToday: sessionEarnedToday.toFixed(6),
+      sessionEarnedLifetime: sessionEarnedLifetime.toFixed(6),
+      estimatedRevenue: clientRevenueTotal.toFixed(6),
+      totalBillingCount
     },
     logs
   });

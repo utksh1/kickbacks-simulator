@@ -74,13 +74,13 @@ describe('App Dashboard Interface Tests', () => {
     render(<App />);
 
     // Login screen should show
-    expect(screen.getByRole('heading', { name: /kickbacks control/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /kickbacks atlas/i })).toBeInTheDocument();
     
     // Simulate login form submit
-    const passwordInput = screen.getByLabelText(/password/i);
+    const passwordInput = screen.getByLabelText(/master password/i);
     fireEvent.change(passwordInput, { target: { value: 'Ankitsin' } });
     
-    const signInButton = screen.getByRole('button', { name: /sign in/i });
+    const signInButton = screen.getByRole('button', { name: /access atlas fleet/i });
     fireEvent.click(signInButton);
 
     // Wait for async client loading to render in DOM
@@ -89,7 +89,7 @@ describe('App Dashboard Interface Tests', () => {
     });
 
     expect(screen.getAllByText(/Attio/i)[0]).toBeInTheDocument();
-    expect(screen.getByText(/fleet command/i)).toBeInTheDocument();
+    expect(screen.getByText(/Fleet Intelligence/i)).toBeInTheDocument();
   });
 
   it('allows switching tabs', async () => {
@@ -105,7 +105,7 @@ describe('App Dashboard Interface Tests', () => {
     fireEvent.click(configTabs[0]);
 
     await waitFor(() => {
-      expect(screen.getByText(/control settings/i)).toBeInTheDocument();
+      expect(screen.getByText(/cluster endpoints/i)).toBeInTheDocument();
     });
 
     // Switch to Logs tab
@@ -113,7 +113,7 @@ describe('App Dashboard Interface Tests', () => {
     fireEvent.click(logsTabs[0]);
 
     await waitFor(() => {
-      expect(screen.getByText(/live terminal/i)).toBeInTheDocument();
+      expect(screen.getByText(/live simulator logs/i)).toBeInTheDocument();
     });
   });
 
@@ -130,11 +130,11 @@ describe('App Dashboard Interface Tests', () => {
     fireEvent.click(configTabs[0]);
 
     await waitFor(() => {
-      expect(screen.getByText(/new endpoint/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/add cluster endpoint/i)).toBeInTheDocument();
     });
 
     // Add new backend endpoint
-    const newEndpointInput = screen.getByPlaceholderText(/https:\/\/example.onrender.com/i);
+    const newEndpointInput = screen.getByPlaceholderText(/http:\/\/localhost:3011/i);
     fireEvent.change(newEndpointInput, { target: { value: 'https://test-backend.onrender.com' } });
     
     const addBtn = screen.getByRole('button', { name: /add endpoint/i });

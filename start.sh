@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 
-# Kickbacks Simulator - Complete Local Fleet Startup Script
-# Starts 4 Backends (ports 3001-3004) and 1 Frontend Dashboard (port 5173)
+# Kickbacks Simulator - Single Account Fleet Startup Script
+# Starts 1 Backend (port 3001, 5 clients) and 1 Frontend Dashboard (port 5174)
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR"
 
+NUM_ACCOUNTS=$(node -e 'try { const fs=require("fs"); const c=JSON.parse(fs.readFileSync("./backend/config.json")); console.log(c.length); } catch(e) { console.log(1); }')
+TOTAL_INSTANCES=${TOTAL_INSTANCES:-$NUM_ACCOUNTS}
+CLIENTS_PER_INSTANCE=${CLIENTS_PER_INSTANCE:-5}
+TOTAL_CLIENTS=$((TOTAL_INSTANCES * CLIENTS_PER_INSTANCE))
+
 echo "========================================================"
-echo "🚀 Starting Kickbacks Distributed Simulator Fleet..."
+echo "🚀 Starting Kickbacks Simulator Fleet ($TOTAL_INSTANCES Backend(s), $TOTAL_CLIENTS clients total)..."
 echo "========================================================"
 
 # Make log directory
@@ -24,35 +29,45 @@ cleanup_port() {
 }
 
 echo "1. Checking and cleaning existing ports..."
-cleanup_port 3001
-cleanup_port 3002
-cleanup_port 3003
-cleanup_port 3004
-cleanup_port 5173
+for p in $(seq 3001 3010); do
+  cleanup_port $p
+done
+cleanup_port 5174
+pkill -9 -f "simulator.js" 2>/dev/null || true
+pkill -9 -f "server.js" 2>/dev/null || true
+echo "2. Starting $TOTAL_INSTANCES dedicated backend instances ($CLIENTS_PER_INSTANCE clients each, $TOTAL_CLIENTS clients total)..."
+for i in $(seq 1 $TOTAL_INSTANCES); do
+  port=$((3000 + i))
+  account_idx=$((i - 1))
+  account_name=$(node -e "try { const fs=require('fs'); const c=JSON.parse(fs.readFileSync('./backend/config.json')); console.log(c[$account_idx]?.name || 'account_$i'); } catch(e) { console.log('account_$i'); }")
 
-echo "2. Starting 4 local backend instances..."
-PORT=3001 INSTANCE_NAME=instance_1 TOTAL_INSTANCES=4 node "$DIR/backend/server.js" > "$DIR/logs/backend_1.log" 2>&1 &
-echo "   -> [Backend 1] instance_1 started on http://localhost:3001 (PID: $!)"
-
-PORT=3002 INSTANCE_NAME=instance_2 TOTAL_INSTANCES=4 node "$DIR/backend/server.js" > "$DIR/logs/backend_2.log" 2>&1 &
-echo "   -> [Backend 2] instance_2 started on http://localhost:3002 (PID: $!)"
-
-PORT=3003 INSTANCE_NAME=instance_3 TOTAL_INSTANCES=4 node "$DIR/backend/server.js" > "$DIR/logs/backend_3.log" 2>&1 &
-echo "   -> [Backend 3] instance_3 started on http://localhost:3003 (PID: $!)"
-
-PORT=3004 INSTANCE_NAME=instance_4 TOTAL_INSTANCES=4 node "$DIR/backend/server.js" > "$DIR/logs/backend_4.log" 2>&1 &
-echo "   -> [Backend 4] instance_4 started on http://localhost:3004 (PID: $!)"
+  PORT=$port \
+  INSTANCE_NAME="inst_${i} · ${account_name}" \
+  ACCOUNT_INDEX=$account_idx \
+  DEDICATED_ACCOUNT=true \
+  CLIENTS_PER_INSTANCE=$CLIENTS_PER_INSTANCE \
+  TOTAL_INSTANCES=$TOTAL_INSTANCES \
+  nohup node "$DIR/backend/server.js" > "$DIR/logs/backend_$i.log" 2>&1 &
+  BACKEND_PID=$!
+  disown $BACKEND_PID 2>/dev/null || true
+  
+  echo "   -> [Backend $i] Dedicated to '$account_name' ($CLIENTS_PER_INSTANCE clients) on http://localhost:$port (PID: $BACKEND_PID)"
+done
 
 echo "3. Starting React Frontend Dashboard..."
-npm run dev --prefix "$DIR/frontend" > "$DIR/logs/frontend.log" 2>&1 &
-echo "   -> [Frontend] Dashboard started on http://localhost:5173 (PID: $!)"
+nohup npm run dev --prefix "$DIR/frontend" -- --port 5174 > "$DIR/logs/frontend.log" 2>&1 &
+FRONTEND_PID=$!
+disown $FRONTEND_PID 2>/dev/null || true
+echo "   -> [Frontend] Dashboard started on http://localhost:5174 (PID: $FRONTEND_PID)"
 
 echo ""
 echo "========================================================"
-echo "✨ Fleet is live and running!"
-echo "   - Dashboard: http://localhost:5173"
-echo "   - Backend 1: http://localhost:3001"
-echo "   - Backend 2: http://localhost:3002"
-echo "   - Backend 3: http://localhost:3003"
-echo "   - Backend 4: http://localhost:3004"
+echo "✨ Fleet of $TOTAL_INSTANCES dedicated backends is live and running!"
+echo "   - Dashboard: http://localhost:5174"
+for i in $(seq 1 $TOTAL_INSTANCES); do
+  port=$((3000 + i))
+  account_idx=$((i - 1))
+  account_name=$(node -e "try { const fs=require('fs'); const c=JSON.parse(fs.readFileSync('./backend/config.json')); console.log(c[$account_idx]?.name || 'account_$i'); } catch(e) { console.log('account_$i'); }")
+  echo "   - Backend $i ($account_name): http://localhost:$port"
+done
 echo "========================================================"

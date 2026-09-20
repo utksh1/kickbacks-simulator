@@ -40,23 +40,51 @@ async function mint() {
         console.log(`refreshToken: ${credentials.refresh_token}`);
         console.log("-----------------------------------------");
 
-        // Auto-accept Terms of Service so earnings are credited
+        // 1. Auto-accept Terms of Service & Boosted Mode
         try {
-          const tosRes = await fetch(`${BACKEND_BASE}/v1/me/consent`, {
+          await fetch(`${BACKEND_BASE}/v1/me/consent`, {
             method: "POST",
-            headers: { "authorization": `Bearer ${credentials.access_token}`, "content-type": "application/json" }
+            headers: { "authorization": `Bearer ${credentials.access_token}`, "content-type": "application/json" },
+            body: JSON.stringify({ tos_accepted_version: "2026-03-01", accepted: true })
           });
-          if (tosRes.ok) {
-            const tosData = await tosRes.json();
-            console.log(`✅ TOS Accepted (version: ${tosData.tos_version}, telemetry: ${tosData.telemetry_opt_in})`);
-          } else {
-            console.log(`⚠️ TOS acceptance returned ${tosRes.status} — accept manually via the extension.`);
-          }
+          await fetch(`${BACKEND_BASE}/v1/me/consent/scopes`, {
+            method: "POST",
+            headers: { "authorization": `Bearer ${credentials.access_token}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              scopes: { kickbacks_consent: true, boosted_ack: true },
+              boosted_ack: { accepted: true, version: "v2-scopes-3" }
+            })
+          });
+          console.log(`✅ TOS & Boosted Consent Auto-Accepted.`);
         } catch (e) {
-          console.log(`⚠️ TOS acceptance failed: ${e.message}`);
+          console.log(`⚠️ Consent setup error: ${e.message}`);
         }
 
-        console.log("Copy the values above and paste them into config.json.");
+        // 2. Auto-append to config.json and PostgreSQL
+        try {
+          const { loadConfig, saveConfig } = require('./db');
+          const currentConfig = await loadConfig();
+          const accountName = `account_${currentConfig.length + 1}_${clientId.slice(0, 6)}`;
+          
+          const newAccount = {
+            name: accountName,
+            clientId: clientId,
+            refreshToken: credentials.refresh_token,
+            scale: 100,
+            accessToken: credentials.access_token
+          };
+
+          currentConfig.push(newAccount);
+          await saveConfig(currentConfig);
+
+          console.log(`\n🚀 Account successfully saved to config.json and database!`);
+          console.log(`Total Active Accounts in Fleet: ${currentConfig.length}`);
+          console.log(`Run ./start.sh or restart cluster to distribute clients across all ${currentConfig.length} accounts.\n`);
+        } catch (saveErr) {
+          console.error("Failed to auto-save config:", saveErr.message);
+        }
+
+        process.exit(0);
       } else if (pollRes.status !== 202) {
         console.log(`Polling status: ${pollRes.status}. Retrying...`);
       }
