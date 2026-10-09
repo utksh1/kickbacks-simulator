@@ -2,6 +2,7 @@
 
 # Kickbacks Simulator - Fleet Shutdown Script
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
 echo "========================================================"
 echo "🛑 Stopping Kickbacks Distributed Simulator Fleet..."

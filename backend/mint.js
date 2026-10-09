@@ -24,6 +24,14 @@ async function mint() {
   }
 
   console.log(`\n👉 OPEN THIS LINK IN YOUR BROWSER AND SIGN IN:\n\n${loginUrl}\n`);
+  try {
+    const { exec } = require('child_process');
+    if (process.platform === 'darwin') {
+      exec(`open "${loginUrl}"`);
+    }
+  } catch (err) {
+    // Non-fatal if browser open fails
+  }
   console.log("Waiting for authorization (polling every 3s)...");
 
   const interval = setInterval(async () => {
@@ -60,26 +68,25 @@ async function mint() {
           console.log(`⚠️ Consent setup error: ${e.message}`);
         }
 
-        // 2. Auto-append to config.json and PostgreSQL
+        // 2. Save single account with 5 clients to config.json and database
         try {
-          const { loadConfig, saveConfig } = require('./db');
-          const currentConfig = await loadConfig();
-          const accountName = `account_${currentConfig.length + 1}_${clientId.slice(0, 6)}`;
+          const { saveConfig } = require('./db');
+          const accountName = `account_1_${clientId.slice(0, 6)}`;
           
           const newAccount = {
             name: accountName,
             clientId: clientId,
             refreshToken: credentials.refresh_token,
-            scale: 100,
+            scale: 5,
             accessToken: credentials.access_token
           };
 
-          currentConfig.push(newAccount);
-          await saveConfig(currentConfig);
+          const singleConfig = [newAccount];
+          await saveConfig(singleConfig);
 
-          console.log(`\n🚀 Account successfully saved to config.json and database!`);
-          console.log(`Total Active Accounts in Fleet: ${currentConfig.length}`);
-          console.log(`Run ./start.sh or restart cluster to distribute clients across all ${currentConfig.length} accounts.\n`);
+          console.log(`\n🚀 Single account successfully saved to config.json and database!`);
+          console.log(`Configured: 1 account (${accountName}) with 5 virtual clients.`);
+          console.log(`Run ./start.sh to launch the 1 backend instance (port 3001) with all 5 clients and the dashboard (port 5174).\n`);
         } catch (saveErr) {
           console.error("Failed to auto-save config:", saveErr.message);
         }

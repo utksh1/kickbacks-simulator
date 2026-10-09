@@ -6,6 +6,8 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR"
 
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+
 NUM_ACCOUNTS=$(node -e 'try { const fs=require("fs"); const c=JSON.parse(fs.readFileSync("./backend/config.json")); console.log(c.length); } catch(e) { console.log(1); }')
 TOTAL_INSTANCES=${TOTAL_INSTANCES:-$NUM_ACCOUNTS}
 CLIENTS_PER_INSTANCE=${CLIENTS_PER_INSTANCE:-5}
