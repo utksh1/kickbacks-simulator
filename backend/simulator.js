@@ -6,8 +6,8 @@ const { loadConfig, saveConfig } = require('./db');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const BACKEND_BASE = "https://kickbacks-backend-gmdaqm2c7q-uw.a.run.app";
-const CC_VERSION = "2.1.278";
-const EXT_VERSION = "3.1.1";
+const CC_VERSION = "2.1.328";
+const EXT_VERSION = "3.1.7";
 
 const clientEnv = {
   os: process.platform,
